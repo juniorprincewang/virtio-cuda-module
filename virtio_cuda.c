@@ -2068,7 +2068,7 @@ static int add_port(struct ports_device *portdev, u32 id)
 	port->cdev->ops = &port_fops;
 	// for debug
 	dev_err(&port->portdev->vdev->dev,
-			"portdev->chr_major=%d\n", portdev->chr_major);
+			"Debugging: portdev->chr_major=%d\n", portdev->chr_major);
 	devt = MKDEV(portdev->chr_major, id);
 	err = cdev_add(port->cdev, devt, 1);
 	if (err < 0) {
