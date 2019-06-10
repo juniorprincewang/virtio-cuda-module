@@ -40,7 +40,6 @@
 
 #include "virtio_cuda.h"
 #include "virtio-ioc.h"
-#define is_rproc_enabled IS_ENABLED(CONFIG_REMOTEPROC)
 
 #define gldebug(fmt, arg...) printk(KERN_DEBUG fmt, ##arg)
 #define func() pr_info("[FUNC]%s\n",__FUNCTION__)
@@ -294,11 +293,6 @@ static bool is_console_port(struct port *port)
 	return false;
 }
 
-static bool is_rproc_serial(const struct virtio_device *vdev)
-{
-	return is_rproc_enabled && vdev->id.device == VIRTIO_ID_RPROC_SERIAL;
-}
-
 static inline bool use_multiport(struct ports_device *portdev)
 {
 	/*
@@ -326,21 +320,6 @@ static void free_buf(struct port_buffer *buf, bool can_sleep)
 
 	if (!buf->dev) {
 		kfree(buf->buf);
-	} else if (is_rproc_enabled) {
-		unsigned long flags;
-
-		/* dma_free_coherent requires interrupts to be enabled. */
-		if (!can_sleep) {
-			/* queue up dma-buffers to be freed later */
-			spin_lock_irqsave(&dma_bufs_lock, flags);
-			list_add_tail(&buf->list, &pending_free_dma_bufs);
-			spin_unlock_irqrestore(&dma_bufs_lock, flags);
-			return;
-		}
-		dma_free_coherent(buf->dev, buf->size, buf->buf, buf->dma);
-
-		/* Release device refcnt and allow it to be freed */
-		put_device(buf->dev);
 	}
 
 	kfree(buf);
@@ -391,25 +370,8 @@ static struct port_buffer *alloc_buf(struct virtqueue *vq, size_t buf_size,
 		return buf;
 	}
 
-	if (is_rproc_serial(vq->vdev)) {
-		/*
-		 * Allocate DMA memory from ancestor. When a virtio
-		 * device is created by remoteproc, the DMA memory is
-		 * associated with the grandparent device:
-		 * vdev => rproc => platform-dev.
-		 */
-		if (!vq->vdev->dev.parent || !vq->vdev->dev.parent->parent)
-			goto free_buf;
-		buf->dev = vq->vdev->dev.parent->parent;
-
-		/* Increase device refcnt to avoid freeing it */
-		get_device(buf->dev);
-		buf->buf = dma_alloc_coherent(buf->dev, buf_size, &buf->dma,
-					      GFP_KERNEL);
-	} else {
-		buf->dev = NULL;
-		buf->buf = kmalloc(buf_size, GFP_KERNEL);
-	}
+	buf->dev = NULL;
+	buf->buf = kmalloc(buf_size, GFP_KERNEL);
 
 	if (!buf->buf)
 		goto free_buf;
@@ -879,15 +841,6 @@ static ssize_t port_fops_splice_write(struct pipe_inode_info *pipe,
 		.pos = *ppos,
 		.u.data = &sgl,
 	};
-
-	/*
-	 * Rproc_serial does not yet support splice. To support splice
-	 * pipe_to_sg() must allocate dma-buffers and copy content from
-	 * regular pages to dma pages. And alloc_buf and free_buf must
-	 * support allocating and freeing such a list of dma-buffers.
-	 */
-	if (is_rproc_serial(port->out_vq->vdev))
-		return -EINVAL;
 
 	/*
 	 * pipe->nrbufs == 0 means there are no data to transfer,
@@ -2146,14 +2099,7 @@ static int add_port(struct ports_device *portdev, u32 id)
 		goto free_device;
 	}
 
-	if (is_rproc_serial(port->portdev->vdev))
-		/*
-		 * For rproc_serial assume remote processor is connected.
-		 * rproc_serial does not want the console port, only
-		 * the generic port implementation.
-		 */
-		port->host_connected = true;
-	else if (!use_multiport(port->portdev)) {
+	if (!use_multiport(port->portdev)) {
 		/*
 		 * If we're not using multiport support,
 		 * this has to be a console port.
@@ -2497,7 +2443,7 @@ static void in_intr(struct virtqueue *vq)
 	 * guest_connected to true.
 	 */
 
-	if (!port->guest_connected && !is_rproc_serial(port->portdev->vdev))
+	if (!port->guest_connected)
 		discard_port_data(port);
 
 	/* Send a SIGIO indicating new data in case the process asked for it */
@@ -2715,14 +2661,6 @@ static int virtcons_probe(struct virtio_device *vdev)
 	multiport = false;
 	portdev->max_nr_ports = 1;
 
-	/* Don't test MULTIPORT at all if we're rproc: not a valid feature! */
-	if (!is_rproc_serial(vdev) &&
-	    virtio_cread_feature(vdev, VIRTIO_CONSOLE_F_MULTIPORT,
-				 struct virtio_console_config, max_nr_ports,
-				 &portdev->max_nr_ports) == 0) {
-		multiport = true;
-	}
-
 	err = init_vqs(portdev);
 	if (err < 0) {
 		dev_err(&vdev->dev, "Error %d initializing vqs\n", err);
@@ -2841,15 +2779,6 @@ static unsigned int features[] = {
 	VIRTIO_CONSOLE_F_MULTIPORT,
 };
 
-static struct virtio_device_id rproc_serial_id_table[] = {
-#if IS_ENABLED(CONFIG_REMOTEPROC)
-	{ VIRTIO_ID_RPROC_SERIAL, VIRTIO_DEV_ANY_ID },
-#endif
-	{ 0 },
-};
-
-static unsigned int rproc_serial_features[] = {
-};
 
 #ifdef CONFIG_PM_SLEEP
 static int virtcons_freeze(struct virtio_device *vdev)
@@ -2940,16 +2869,6 @@ static struct virtio_driver virtio_console = {
 #endif
 };
 
-static struct virtio_driver virtio_rproc_serial = {
-	.feature_table = rproc_serial_features,
-	.feature_table_size = ARRAY_SIZE(rproc_serial_features),
-	.driver.name =	"virtio_rproc_serial",
-	.driver.owner =	THIS_MODULE,
-	.id_table =	rproc_serial_id_table,
-	.probe =	virtcons_probe,
-	.remove =	virtcons_remove,
-};
-
 static int __init init(void)
 {
 	int err;
@@ -2972,15 +2891,8 @@ static int __init init(void)
 		pr_err("Error %d registering virtio driver\n", err);
 		goto free;
 	}
-	err = register_virtio_driver(&virtio_rproc_serial);
-	if (err < 0) {
-		pr_err("Error %d registering virtio rproc serial driver\n",
-		       err);
-		goto unregister;
-	}
+	
 	return 0;
-unregister:
-	unregister_virtio_driver(&virtio_console);
 free:
 	debugfs_remove_recursive(pdrvdata.debugfs_dir);
 	class_destroy(pdrvdata.class);
@@ -2992,7 +2904,6 @@ static void __exit fini(void)
 	reclaim_dma_bufs();
 
 	unregister_virtio_driver(&virtio_console);
-	unregister_virtio_driver(&virtio_rproc_serial);
 
 	class_destroy(pdrvdata.class);
 	debugfs_remove_recursive(pdrvdata.debugfs_dir);

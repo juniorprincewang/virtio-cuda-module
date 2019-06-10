@@ -3,7 +3,7 @@ obj-m :=virtio_cuda.o
 all:
 	make -C /lib/modules/`uname -r`/build M=$(PWD) modules
 
-dep: uninstall
+install:
 	cp -f ./virtio_cuda.ko /lib/modules/`uname -r`/kernel/drivers/char/virtio_cuda.ko
 	depmod -a
 	modprobe virtio_cuda
