@@ -1863,13 +1863,13 @@ void cuda_gpa_to_hva(VirtIOArg *arg_u, struct port *ports)
 }
 static long port_fops_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 {
-	struct port *ports;
+	struct port *port;
 	long ret;
 	bool nonblock;
 	func();
 
 	ret = 0;
-	ports = filp->private_data;
+	port = filp->private_data;
 	
 	if (!arg)
 		return 0;
@@ -1878,7 +1878,7 @@ static long port_fops_ioctl(struct file *filp, unsigned int cmd, unsigned long a
 	if(nonblock)
 		return 0;
 
-	ret = wait_port_writable(ports, nonblock);
+	ret = wait_port_writable(port, nonblock);
 	if (ret < 0)
 		return 0;
 	pr_info("in cpu: %d\n",smp_processor_id());
@@ -1888,74 +1888,74 @@ static long port_fops_ioctl(struct file *filp, unsigned int cmd, unsigned long a
 		case VIRTIO_IOC_HELLO:
 			//ioctl_hello(arg);
 			//return -EFAULT;
-			cuda_gpa_to_hva((VirtIOArg*)arg, ports);
+			cuda_gpa_to_hva((VirtIOArg*)arg, port);
 			break;
 		case VIRTIO_IOC_REGISTERFATBINARY:
-			cuda_register_fatbinary((VirtIOArg*)arg, ports);
+			cuda_register_fatbinary((VirtIOArg*)arg, port);
 			break;
 		case VIRTIO_IOC_UNREGISTERFATBINARY:
-			cuda_unregister_fatbinary((VirtIOArg*)arg, ports);
+			cuda_unregister_fatbinary((VirtIOArg*)arg, port);
 			break;
 		case VIRTIO_IOC_REGISTERFUNCTION:
-			cuda_register_function((VirtIOArg*)arg, ports);
+			cuda_register_function((VirtIOArg*)arg, port);
 			break;
 		case VIRTIO_IOC_LAUNCH:
-			cuda_launch((VirtIOArg*)arg, ports);
+			cuda_launch((VirtIOArg*)arg, port);
 			break;
 		case VIRTIO_IOC_MALLOC:
-			cuda_malloc((VirtIOArg*)arg, ports);
+			cuda_malloc((VirtIOArg*)arg, port);
 			break;
 		case VIRTIO_IOC_MEMCPY:
-			cuda_memcpy((VirtIOArg*)arg, ports);
+			cuda_memcpy((VirtIOArg*)arg, port);
 			break;
 		case VIRTIO_IOC_FREE:
-			cuda_free((VirtIOArg*)arg, ports);
+			cuda_free((VirtIOArg*)arg, port);
 			break;
 		// device management
 		case VIRTIO_IOC_GETDEVICE:
-			cuda_get_device((VirtIOArg*)arg, ports);
+			cuda_get_device((VirtIOArg*)arg, port);
 			break;
 		case VIRTIO_IOC_GETDEVICEPROPERTIES:
-			cuda_get_device_properties((VirtIOArg*)arg, ports);
+			cuda_get_device_properties((VirtIOArg*)arg, port);
 			break;
 		case VIRTIO_IOC_CONFIGURECALL:
-			cuda_configure_call((VirtIOArg*)arg, ports);
+			cuda_configure_call((VirtIOArg*)arg, port);
 			break;
 		case VIRTIO_IOC_SETDEVICE:
-			cuda_set_device((VirtIOArg*)arg, ports);
+			cuda_set_device((VirtIOArg*)arg, port);
 			break;
 		case VIRTIO_IOC_GETDEVICECOUNT:
-			cuda_get_device_count((VirtIOArg*)arg, ports);
+			cuda_get_device_count((VirtIOArg*)arg, port);
 			break;
 		case VIRTIO_IOC_DEVICERESET:
-			cuda_device_reset((VirtIOArg*)arg, ports);
+			cuda_device_reset((VirtIOArg*)arg, port);
 			break;
 		case VIRTIO_IOC_STREAMCREATE:
-			cuda_stream_create((VirtIOArg*)arg, ports);
+			cuda_stream_create((VirtIOArg*)arg, port);
 			break;
 		case VIRTIO_IOC_STREAMDESTROY:
-			cuda_stream_destroy((VirtIOArg*)arg, ports);
+			cuda_stream_destroy((VirtIOArg*)arg, port);
 			break;
 		case VIRTIO_IOC_EVENTCREATE:
-			cuda_event_create((VirtIOArg*)arg, ports);
+			cuda_event_create((VirtIOArg*)arg, port);
 			break;
 		case VIRTIO_IOC_EVENTDESTROY:
-			cuda_event_destroy((VirtIOArg*)arg, ports);
+			cuda_event_destroy((VirtIOArg*)arg, port);
 			break;
 		case VIRTIO_IOC_THREADSYNCHRONIZE:
-			cuda_thread_synchronize((VirtIOArg*)arg, ports);
+			cuda_thread_synchronize((VirtIOArg*)arg, port);
 			break;
 		case VIRTIO_IOC_EVENTSYNCHRONIZE:
-			cuda_event_synchronize((VirtIOArg*)arg, ports);
+			cuda_event_synchronize((VirtIOArg*)arg, port);
 			break;
 		case VIRTIO_IOC_EVENTELAPSEDTIME:
-			cuda_event_elapsed_time((VirtIOArg*)arg, ports);
+			cuda_event_elapsed_time((VirtIOArg*)arg, port);
 			break;
 		case VIRTIO_IOC_EVENTRECORD:
-			cuda_event_record((VirtIOArg*)arg, ports);
+			cuda_event_record((VirtIOArg*)arg, port);
 			break;
 		case VIRTIO_IOC_GETLASTERROR:
-			cuda_get_last_error((VirtIOArg*)arg, ports);
+			cuda_get_last_error((VirtIOArg*)arg, port);
 			break;
 		default:
 			pr_err("[#] illegel VIRTIO ioctl nr = %u!\n", \
@@ -1968,8 +1968,8 @@ static long port_fops_ioctl(struct file *filp, unsigned int cmd, unsigned long a
 /*
  * The file operations that we support: programs in the guest can open
  * a console device, read from it, write to it, poll for data and
- * close it.  The devices are at
- *   /dev/vport<device number>p<port number>
+ * close it, control it using ioctl.  The devices are at
+ *   /dev/cudaport<device number>p<port number>
  */
 static const struct file_operations port_fops = {
 	.owner = THIS_MODULE,
@@ -2162,12 +2162,6 @@ static const struct file_operations port_debugfs_ops = {
 	.read  = debugfs_read,
 };
 
-static void set_console_size(struct port *port, u16 rows, u16 cols)
-{
-	if (!port || !is_console_port(port))
-		return;
-
-}
 
 static unsigned int fill_queue(struct virtqueue *vq, spinlock_t *lock)
 {
@@ -2250,7 +2244,7 @@ static int add_port(struct ports_device *portdev, u32 id)
 		goto free_cdev;
 	}
 	port->dev = device_create(pdrvdata.class, &port->portdev->vdev->dev,
-				  devt, port, "vport%up%u",
+				  devt, port, "cudaport%up%u",
 				  port->portdev->vdev->index, id);
 	if (IS_ERR(port->dev)) {
 		err = PTR_ERR(port->dev);
@@ -2305,7 +2299,7 @@ static int add_port(struct ports_device *portdev, u32 id)
 		 * Finally, create the debugfs file that we can use to
 		 * inspect a port's state at any time
 		 */
-		snprintf(debugfs_name, sizeof(debugfs_name), "vport%up%u",
+		snprintf(debugfs_name, sizeof(debugfs_name), "cudaport%up%u",
 			 port->portdev->vdev->index, id);
 		port->debugfs_file = debugfs_create_file(debugfs_name, 0444,
 							 pdrvdata.debugfs_dir,
@@ -2481,22 +2475,6 @@ static void handle_control_message(struct virtio_device *vdev,
 		 * have to notify the host first.
 		 */
 		break;
-	case VIRTIO_CONSOLE_RESIZE: {
-		struct {
-			__u16 rows;
-			__u16 cols;
-		} size;
-
-		if (!is_console_port(port))
-			break;
-
-		memcpy(&size, buf->buf + buf->offset + sizeof(*cpkt),
-		       sizeof(size));
-		set_console_size(port, size.rows, size.cols);
-
-		// port->cons.hvc->irq_requested = 1;
-		break;
-	}
 	case VIRTIO_CONSOLE_PORT_OPEN:
 		port->host_connected = virtio16_to_cpu(vdev, cpkt->value);
 		wake_up_interruptible(&port->waitqueue);
@@ -2676,8 +2654,6 @@ static void config_work_handler(struct work_struct *work)
 		virtio_cread(vdev, struct virtio_console_config, rows, &rows);
 
 		port = find_port_by_id(portdev, 0);
-		set_console_size(port, rows, cols);
-
 	}
 }
 

@@ -1,5 +1,5 @@
 #include <stdio.h>
-#include "../virtio-ioc.h"
+#include "../../virtio-ioc.h"
 #include <string.h> // memset
 #include <stdlib.h>
 #include <sys/types.h>
@@ -11,7 +11,7 @@
 
 int fd=-1;
 #define MODE O_RDWR
-#define DEVICE_PATH "/dev/cuda1token1"
+#define DEVICE_PATH "/dev/cudaport2p1"
 #define error(fmt, arg...) printf("[ERROR]: %s->line : %d. "fmt, __FUNCTION__, __LINE__, ##arg)
 #define debug(fmt, arg...) printf("[DEBUG]: "fmt, ##arg)
 #define print(fmt, arg...) printf("[+]INFO: "fmt, ##arg)
@@ -56,7 +56,7 @@ void hello_write(int *var)
 	arg.totalSize = sizeof(VirtIOArg);
 
 	if(ioctl(fd, VIRTIO_IOC_HELLO, &arg) == -1){
-		error("ioctl when cmd is %lu\n", VIRTIO_CUDA_HELLO);
+		error("ioctl when cmd is %d\n", VIRTIO_CUDA_HELLO);
 	}
 	close_vdevice();
 }

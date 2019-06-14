@@ -13,7 +13,7 @@ fat:
 
 all:
 	nvcc step2.cu --cudart=shared -o run
-	LD_PRELOAD=../lib/libvcuda.so ./run
+	LD_PRELOAD=../../lib/libvcuda.so ./run
 
 clean:
 	rm -f ./run

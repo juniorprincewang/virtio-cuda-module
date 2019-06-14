@@ -15,7 +15,7 @@
 #include "../virtio-ioc.h"
 #include <errno.h>
 
-#define DEVICE_PATH "/dev/cuda1token1"
+#define DEVICE_PATH "/dev/cudaport2p1"
 #define error(fmt, arg...) printf("[ERROR]: %s->line : %d. "fmt, __FUNCTION__, __LINE__, ##arg)
 #define debug(fmt, arg...) printf("[DEBUG]: "fmt, ##arg)
 #define print(fmt, arg...) printf("[+]INFO: "fmt, ##arg)
