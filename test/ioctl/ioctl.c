@@ -51,9 +51,8 @@ void hello_write(int *var)
 		_IOC_SIZE(VIRTIO_IOC_HELLO) );
 	memset(&arg, 0, sizeof(VirtIOArg));
 	arg.cmd = VIRTIO_CUDA_HELLO;
-	arg.src = (void*)var;
+	arg.src = var;
 	arg.srcSize = sizeof(int);
-	arg.totalSize = sizeof(VirtIOArg);
 
 	if(ioctl(fd, VIRTIO_IOC_HELLO, &arg) == -1){
 		error("ioctl when cmd is %d\n", VIRTIO_CUDA_HELLO);

@@ -64,9 +64,9 @@ typedef struct VirtIOArg
 {
 	uint32_t cmd;
 	uint32_t tid;
-	void *src;
+	uint64_t src;
 	uint32_t srcSize;
-	void *dst;
+	uint64_t dst;
 	uint32_t dstSize;
 	uint64_t flag;
 	uint64_t param;

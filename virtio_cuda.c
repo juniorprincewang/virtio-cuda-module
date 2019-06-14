@@ -376,7 +376,7 @@ static LIST_HEAD(pending_free_dma_bufs);
 static void free_buf(struct port_buffer *buf, bool can_sleep)
 {
 	unsigned int i;
-
+	func();
 	for (i = 0; i < buf->sgpages; i++) {
 		struct page *page = sg_page(&buf->sg[i]);
 		if (!page)
@@ -404,6 +404,7 @@ static void free_buf(struct port_buffer *buf, bool can_sleep)
 	}
 
 	kfree(buf);
+	func();
 }
 
 static void reclaim_dma_bufs(void)
@@ -414,7 +415,7 @@ static void reclaim_dma_bufs(void)
 
 	if (list_empty(&pending_free_dma_bufs))
 		return;
-
+	func();
 	/* Create a copy of the pending_free_dma_bufs while holding the lock */
 	spin_lock_irqsave(&dma_bufs_lock, flags);
 	list_cut_position(&tmp_list, &pending_free_dma_bufs,
@@ -533,7 +534,7 @@ static void discard_port_data(struct port *port)
 		return;
 	}
 	buf = get_inbuf(port);
-
+	func();
 	err = 0;
 	while (buf) {
 		port->stats.bytes_discarded += buf->len - buf->offset;
@@ -615,6 +616,7 @@ static void reclaim_consumed_buffers(struct port *port)
 		/* Device has been unplugged.  vqs are already gone. */
 		return;
 	}
+	func();
 	while ((buf = virtqueue_get_buf(port->out_vq, &len))) {
 		free_buf(buf, false);
 		port->outvq_full = false;
@@ -829,7 +831,7 @@ static ssize_t port_fops_write(struct file *filp, const char __user *ubuf,
 	ssize_t ret;
 	bool nonblock;
 	struct scatterlist sg[1];
-
+	func();
 	/* Userspace could be out to fool us */
 	if (!count)
 		return 0;
@@ -1017,6 +1019,8 @@ static int port_fops_release(struct inode *inode, struct file *filp)
 {
 	struct port *port;
 
+	func();
+
 	port = filp->private_data;
 
 	/* Notify host of port being closed */
@@ -1135,30 +1139,37 @@ unsigned int copy_to_user_safe(void __user *to, void*from, unsigned long size)
 	return err;
 }
 
-void send_to_virtio(void *payload, unsigned int count, unsigned int ret_len, struct port *ports)
+int send_to_virtio(struct port *port, void __user *payload, size_t count)
 {
 	struct scatterlist sg[1];
-	struct port_buffer *buf = NULL;
+	struct port_buffer *buf;
 	unsigned char *out;
 	unsigned int err = 0;
 	long ret = 0;
 	long recv = 0;
 	unsigned int len;
 	bool nonblock;
+	void *data;
 
-	len = min((unsigned int)(32 * 1024), count);
-	pr_info("[+] sending %d buffer, actual %d buffer to host\n", count, len);
+	len = min((size_t)(32 * 1024), count);
+	gldebug("[+] sending %d buffer, actual %d buffer to host\n", count, len);
 	// allocate buf in virtqueue
-	buf = alloc_buf(ports->out_vq, len, 0);
-	if (!buf) {
-		ret = -ENOMEM;
-		pr_err("[ERROR] alloc_buf\n");
-		return;
+	// buf = alloc_buf(port->out_vq, len, 0);
+	// if (!buf) {
+	// 	ret = -ENOMEM;
+	// 	pr_err("[ERROR] alloc_buf\n");
+	// 	return;
+	// }
+	// // now copy virtio arguments
+	// copy_from_user((void*)(buf->buf), payload, len);
+
+	data = memdup_user(payload, (size_t)len);
+	if(!data) {
+		pr_err("[ERROR] can not malloc 0x%x memory\n", len);	
+		return -ENOMEM;
 	}
-	// now copy virtio arguments
-	memcpy((void *)(buf->buf), payload, len);
-	
-	sg_init_one(sg, buf->buf, len);
+	sg_init_one(sg, data, len);
+	// sg_init_one(sg, buf->buf, len);
 	/*
 	 * We now ask send_buf() to not spin for generic ports -- we
 	 * can re-use the same code path that non-blocking file
@@ -1167,28 +1178,35 @@ void send_to_virtio(void *payload, unsigned int count, unsigned int ret_len, str
 	 * through to the host.
 	 */
 	nonblock = true;
-	err = __send_to_port(ports, sg, 1, len, buf, nonblock);
-	if (!err) {
+	err = __send_to_port(port, sg, 1, len, data, nonblock);
+	if (!nonblock || !err) {
 		ret = -ENOTTY;
 		pr_err("[ERROR]  __send_to_port\n");
-		goto free_buf;
+		// goto free_buf;
+		return ret;
 	}
-	pr_info("Finish sending data\n");
+	kfree(data);
+	gldebug("Finish sending data\n");
+#if 0
 	//now read data from host
-	if (!port_has_data(ports)) {
+	/* Port is hot-unplugged. */
+	if (!port->guest_connected)
+		return -ENODEV;
+
+	if (!port_has_data(port)) {
 		/*
 		 * If nothing's connected on the host just return 0 in
 		 * case of list_empty; this tells the userspace app
 		 * that there's no connection
 		 */
-		if (!ports->host_connected)
+		if (!port->host_connected)
 			goto free_buf;
-		err = wait_event_freezable(ports->waitqueue, !will_read_block(ports));
+		err = wait_event_freezable(port->waitqueue, !will_read_block(port));
 		if (ret < 0)
 			goto free_buf;
 	}
 	// Port got hot-unplugged while we were waiting above. 
-	if (!ports->guest_connected)
+	if (!port->guest_connected)
 		goto free_buf;
 	/*
 	 * We could've received a disconnection message while we were
@@ -1200,22 +1218,22 @@ void send_to_virtio(void *payload, unsigned int count, unsigned int ret_len, str
 	 * really want to give off whatever data we have and only then
 	 * check for host_connected.
 	 */
-	if (!port_has_data(ports) && !ports->host_connected)
+	if (!port_has_data(port) && !port->host_connected)
 		goto free_buf;
 
-	out = (unsigned char*)kmalloc(ret_len, GFP_KERNEL);
-	recv = fill_readbuf(ports, out , ret_len, false);
-//	recv = get_buffer_from_vq(ports, out , ret_len, false);
-	pr_info("receiving %zu data\n", recv);
-	// the following is just for debug
-	pr_info("[+] ((VirtIOArg*)out)->cmd = %d\n", ((VirtIOArg*)out)->cmd);
-	memcpy(payload, out, ret_len);
-	kfree(out);
-free_buf:
-	free_buf(buf, true);
+	// out = (unsigned char*)kmalloc(count, GFP_KERNEL);
+	// recv = fill_readbuf(port, out , count, false);
+	// recv = fill_readbuf(port, payload, count, true);
+	// gldebug("receiving %zu data\n", recv);
+	// memcpy(payload, out, count);
+	// kfree(out);
+#endif
+// free_buf:
+// 	free_buf(buf, true);
+	return 0;
 }
 
-void cuda_register_fatbinary(VirtIOArg *arg_u, struct port *ports)
+void cuda_register_fatbinary(VirtIOArg *arg_u, struct port *port)
 {
 	unsigned char *fat, *payload;
 	unsigned int len=0;
@@ -1236,7 +1254,7 @@ void cuda_register_fatbinary(VirtIOArg *arg_u, struct port *ports)
 	memcpy(payload, (void*)arg_u, sizeof(VirtIOArg));
 	memcpy(payload + sizeof(VirtIOArg), fat, arg_u->srcSize);
 
-	send_to_virtio(payload, arg_u->totalSize, len, ports);
+	send_to_virtio(port, payload, len);
 	pr_info("[+] Now analyse return buf\n");
 	pr_info("[+] arg->cmd = %d\n", ((VirtIOArg*)payload)->cmd);
 	arg_u->cmd = ((VirtIOArg*)payload)->cmd;
@@ -1253,7 +1271,7 @@ void ioctl_hello(unsigned long arg)
 	copy_to_user((void *)arg, &hello, sizeof(int));
 }
 
-void cuda_unregister_fatbinary(VirtIOArg *arg_u, struct port *ports)
+void cuda_unregister_fatbinary(VirtIOArg *arg_u, struct port *port)
 {
 	unsigned char *payload;
 	unsigned int len=0;
@@ -1264,14 +1282,14 @@ void cuda_unregister_fatbinary(VirtIOArg *arg_u, struct port *ports)
 	payload = kmalloc(arg_u->totalSize, GFP_KERNEL);
 	memcpy(payload, (void*)arg_u, sizeof(VirtIOArg));
 
-	send_to_virtio(payload, arg_u->totalSize, len, ports);
+	send_to_virtio(port, payload, arg_u->totalSize);
 	gldebug("[+] Now analyse return buf\n");
 	gldebug("[+] arg->cmd = %d\n", ((VirtIOArg*)payload)->cmd);
 	arg_u->cmd = ((VirtIOArg*)payload)->cmd;
 	kfree(payload);
 }
 
-void cuda_register_function(VirtIOArg *arg_u, struct port *ports)
+void cuda_register_function(VirtIOArg *arg_u, struct port *port)
 {
 	char *fat, *name, *payload;
 	unsigned int len=0;
@@ -1302,7 +1320,7 @@ void cuda_register_function(VirtIOArg *arg_u, struct port *ports)
 	memcpy(payload + sizeof(VirtIOArg), fat, arg_u->srcSize);
 	memcpy(payload + sizeof(VirtIOArg) + arg_u->srcSize, name, arg_u->dstSize);
 
-	send_to_virtio(payload, arg_u->totalSize, len, ports);
+	send_to_virtio(port, payload, arg_u->totalSize);
 	gldebug("[+] now analyse return buf\n");
 	gldebug("[+] arg->cmd = %d\n", ((VirtIOArg*)payload)->cmd);
 	arg_u->cmd = ((VirtIOArg*)payload)->cmd;
@@ -1312,7 +1330,7 @@ void cuda_register_function(VirtIOArg *arg_u, struct port *ports)
 	kfree(payload);
 }
 
-void cuda_launch(VirtIOArg *arg_u, struct port *ports)
+void cuda_launch(VirtIOArg *arg_u, struct port *port)
 {
 	char *conf, *para, *payload;
 	unsigned int len=0;
@@ -1341,7 +1359,7 @@ void cuda_launch(VirtIOArg *arg_u, struct port *ports)
 	memcpy(payload + sizeof(VirtIOArg), para, arg_u->srcSize);
 	memcpy(payload + sizeof(VirtIOArg) + arg_u->srcSize, conf, arg_u->dstSize);
 
-	send_to_virtio(payload, arg_u->totalSize, len, ports);
+	send_to_virtio(port, payload, arg_u->totalSize);
 	gldebug("[+] now analyse return buf\n");
 	gldebug("[+] arg->cmd = %d\n", ((VirtIOArg*)payload)->cmd);
 	arg_u->cmd = ((VirtIOArg*)payload)->cmd;
@@ -1350,7 +1368,7 @@ void cuda_launch(VirtIOArg *arg_u, struct port *ports)
 	kfree(conf);
 	kfree(payload);
 }
-void cuda_malloc(VirtIOArg *arg_u, struct port *ports)
+void cuda_malloc(VirtIOArg *arg_u, struct port *port)
 {
 	char *payload;
 	func();
@@ -1358,7 +1376,7 @@ void cuda_malloc(VirtIOArg *arg_u, struct port *ports)
 	// fill payload
 	payload = kmalloc(arg_u->totalSize, GFP_KERNEL);
 	memcpy(payload, (void*)arg_u, sizeof(VirtIOArg));
-	send_to_virtio(payload, arg_u->totalSize, sizeof(VirtIOArg), ports);
+	send_to_virtio(port, payload, arg_u->totalSize);
 	gldebug("[+] now analyse return buf\n");
 	gldebug("[+] arg->cmd = %d\n", ((VirtIOArg*)payload)->cmd);
 	gldebug("[+] arg->dst = %p\n", ((VirtIOArg*)payload)->dst);
@@ -1368,7 +1386,7 @@ void cuda_malloc(VirtIOArg *arg_u, struct port *ports)
 	kfree(payload);
 }
 
-void cuda_memcpy(VirtIOArg *arg_u, struct port *ports)
+void cuda_memcpy(VirtIOArg *arg_u, struct port *port)
 {
 	char *in, *payload;
 	unsigned int len=0;
@@ -1393,7 +1411,7 @@ void cuda_memcpy(VirtIOArg *arg_u, struct port *ports)
 		}
 		memcpy(payload, (void*)arg_u, sizeof(VirtIOArg));
 		memcpy(payload + sizeof(VirtIOArg), in, arg_u->srcSize);
-		send_to_virtio(payload, arg_u->totalSize, sizeof(VirtIOArg), ports);
+		send_to_virtio(port, payload, arg_u->totalSize);
 		gldebug("[+] now analyse return buf\n");
 		gldebug("[+] arg->cmd = %d\n", ((VirtIOArg*)payload)->cmd);
 		arg_u->cmd = ((VirtIOArg*)payload)->cmd;
@@ -1407,7 +1425,7 @@ void cuda_memcpy(VirtIOArg *arg_u, struct port *ports)
 			return;
 		}
 		memcpy(payload, (void*)arg_u, sizeof(VirtIOArg));
-		send_to_virtio(payload, arg_u->totalSize, arg_u->totalSize, ports);
+		send_to_virtio(port, payload, arg_u->totalSize);
 		gldebug("[+] now analyse return buf\n");
 		gldebug("[+] arg->cmd = %d\n", ((VirtIOArg*)payload)->cmd);
 		arg_u->cmd = ((VirtIOArg*)payload)->cmd;
@@ -1421,7 +1439,7 @@ void cuda_memcpy(VirtIOArg *arg_u, struct port *ports)
 			return;
 		}
 		memcpy(payload, (void*)arg_u, sizeof(VirtIOArg));
-		send_to_virtio(payload, arg_u->totalSize, sizeof(VirtIOArg), ports);
+		send_to_virtio(port, payload, arg_u->totalSize);
 		gldebug("[+] now analyse return buf\n");
 		gldebug("[+] arg->cmd = %d\n", ((VirtIOArg*)payload)->cmd);
 		arg_u->cmd = ((VirtIOArg*)payload)->cmd;
@@ -1431,7 +1449,7 @@ void cuda_memcpy(VirtIOArg *arg_u, struct port *ports)
 	}
 }
 
-void cuda_free(VirtIOArg *arg_u, struct port *ports)
+void cuda_free(VirtIOArg *arg_u, struct port *port)
 {
 	char *payload;
 	func();
@@ -1441,14 +1459,14 @@ void cuda_free(VirtIOArg *arg_u, struct port *ports)
 	// fill payload
 	payload = kmalloc(arg_u->totalSize, GFP_KERNEL);
 	memcpy(payload, (void*)arg_u, sizeof(VirtIOArg));
-	send_to_virtio(payload, arg_u->totalSize, sizeof(VirtIOArg), ports);
+	send_to_virtio(port, payload, arg_u->totalSize);
 	gldebug("[+] now analyse return buf\n");
 	gldebug("[+] arg->cmd = %d\n", ((VirtIOArg*)payload)->cmd);
 	gldebug("[+] arg->flag = %p\n", ((VirtIOArg*)payload)->src);
 	arg_u->cmd = ((VirtIOArg*)payload)->cmd;
 	kfree(payload);
 }
-void cuda_get_device_properties(VirtIOArg *arg_u, struct port *ports)
+void cuda_get_device_properties(VirtIOArg *arg_u, struct port *port)
 {
 	void *payload, *in;
 	func();
@@ -1470,7 +1488,7 @@ void cuda_get_device_properties(VirtIOArg *arg_u, struct port *ports)
 	}
 	memcpy(payload, (void*)arg_u, sizeof(VirtIOArg));
 	memcpy(payload + sizeof(VirtIOArg), in, arg_u->dstSize);
-	send_to_virtio(payload, arg_u->totalSize, arg_u->totalSize, ports);
+	send_to_virtio(port, payload, arg_u->totalSize);
 	gldebug("[+] now analyse return buf\n");
 	gldebug("[+] arg->cmd = %d\n", ((VirtIOArg*)payload)->cmd);
 	arg_u->cmd = ((VirtIOArg*)payload)->cmd;
@@ -1478,7 +1496,7 @@ void cuda_get_device_properties(VirtIOArg *arg_u, struct port *ports)
 	kfree(in);
 	kfree(payload);
 }
-void cuda_get_device_count(VirtIOArg *arg_u, struct port *ports)
+void cuda_get_device_count(VirtIOArg *arg_u, struct port *port)
 {
 	void *payload;
 	func();
@@ -1493,7 +1511,7 @@ void cuda_get_device_count(VirtIOArg *arg_u, struct port *ports)
 	}
 	memcpy(payload, (void*)arg_u, sizeof(VirtIOArg));
 
-	send_to_virtio(payload, arg_u->totalSize, arg_u->totalSize,  ports);
+	send_to_virtio(port, payload, arg_u->totalSize);
 	gldebug("[+] now analyse return buf\n");
 	gldebug("[+] arg->cmd = %d\n", ((VirtIOArg*)payload)->cmd);
 	gldebug("[+] arg->flag = %llu\n", ((VirtIOArg*)payload)->flag);
@@ -1501,7 +1519,7 @@ void cuda_get_device_count(VirtIOArg *arg_u, struct port *ports)
 	arg_u->flag = ((VirtIOArg*)payload)->flag;
 	kfree(payload);
 }
-void cuda_get_device(VirtIOArg *arg_u, struct port *ports)
+void cuda_get_device(VirtIOArg *arg_u, struct port *port)
 {
 	void *payload;
 	// header + payload
@@ -1516,14 +1534,14 @@ void cuda_get_device(VirtIOArg *arg_u, struct port *ports)
 	}
 	memcpy(payload, (void*)arg_u, sizeof(VirtIOArg));
 	//memcpy(payload + sizeof(VirtIOArg), in, arg_u->dstSize);
-	send_to_virtio(payload, arg_u->totalSize, arg_u->totalSize, ports);
+	send_to_virtio(port, payload, arg_u->totalSize);
 	gldebug("[+] now analyse return buf\n");
 	gldebug("[+] arg->cmd = %d\n", ((VirtIOArg*)payload)->cmd);
 	arg_u->cmd = ((VirtIOArg*)payload)->cmd;
 	copy_to_user_safe(arg_u->dst, payload+ sizeof(VirtIOArg), arg_u->dstSize);
 	kfree(payload);
 }
-void cuda_set_device(VirtIOArg *arg_u, struct port *ports)
+void cuda_set_device(VirtIOArg *arg_u, struct port *port)
 {
 	void *payload;
 	func();
@@ -1538,13 +1556,13 @@ void cuda_set_device(VirtIOArg *arg_u, struct port *ports)
 		return;
 	}
 	memcpy(payload, (void*)arg_u, sizeof(VirtIOArg));
-	send_to_virtio(payload, arg_u->totalSize, arg_u->totalSize, ports);
+	send_to_virtio(port, payload, arg_u->totalSize);
 	gldebug("[+] now analyse return buf\n");
 	gldebug("[+] arg->cmd = %d\n", ((VirtIOArg*)payload)->cmd);
 	arg_u->cmd = ((VirtIOArg*)payload)->cmd;
 	kfree(payload);
 }
-void cuda_configure_call(VirtIOArg *arg_u, struct port *ports)
+void cuda_configure_call(VirtIOArg *arg_u, struct port *port)
 {
 	unsigned char *in, *payload;
 	unsigned int len=0;
@@ -1565,7 +1583,7 @@ void cuda_configure_call(VirtIOArg *arg_u, struct port *ports)
 	memcpy(payload, (void*)arg_u, sizeof(VirtIOArg));
 	memcpy(payload + sizeof(VirtIOArg), in, arg_u->srcSize);
 
-	send_to_virtio(payload, arg_u->totalSize, len, ports);
+	send_to_virtio(port, payload, arg_u->totalSize);
 	gldebug("[+] Now analyse return buf\n");
 	gldebug("[+] arg->cmd = %d\n", ((VirtIOArg*)payload)->cmd);
 	arg_u->cmd = ((VirtIOArg*)payload)->cmd;
@@ -1573,7 +1591,7 @@ void cuda_configure_call(VirtIOArg *arg_u, struct port *ports)
 	kfree(in);
 	kfree(payload);
 }
-void cuda_device_reset(VirtIOArg *arg_u, struct port *ports)
+void cuda_device_reset(VirtIOArg *arg_u, struct port *port)
 {
 	void *payload;
 	func();
@@ -1588,13 +1606,13 @@ void cuda_device_reset(VirtIOArg *arg_u, struct port *ports)
 	}
 	memcpy(payload, (void*)arg_u, sizeof(VirtIOArg));
 
-	send_to_virtio(payload, arg_u->totalSize, arg_u->totalSize, ports);
+	send_to_virtio(port, payload, arg_u->totalSize);
 	gldebug("[+] now analyse return buf\n");
 	gldebug("[+] arg->cmd = %d\n", ((VirtIOArg*)payload)->cmd);
 	arg_u->cmd = ((VirtIOArg*)payload)->cmd;
 	kfree(payload);
 }
-void cuda_stream_create(VirtIOArg *arg_u, struct port *ports)
+void cuda_stream_create(VirtIOArg *arg_u, struct port *port)
 {
 	void *payload;
 	func();
@@ -1609,7 +1627,7 @@ void cuda_stream_create(VirtIOArg *arg_u, struct port *ports)
 	}
 	memcpy(payload, (void*)arg_u, sizeof(VirtIOArg));
 	// memcpy(payload + sizeof(VirtIOArg), stream, arg_u->srcSize);
-	send_to_virtio(payload, arg_u->totalSize, arg_u->totalSize, ports);
+	send_to_virtio(port, payload, arg_u->totalSize);
 	gldebug("[+] now analyse return buf\n");
 	gldebug("[+] arg->cmd = %d\n", ((VirtIOArg*)payload)->cmd);
 	arg_u->cmd = ((VirtIOArg*)payload)->cmd;
@@ -1617,7 +1635,7 @@ void cuda_stream_create(VirtIOArg *arg_u, struct port *ports)
 	copy_to_user_safe(arg_u->src, payload+ sizeof(VirtIOArg), arg_u->srcSize);
 	kfree(payload);
 }
-void cuda_stream_destroy(VirtIOArg *arg_u, struct port *ports)
+void cuda_stream_destroy(VirtIOArg *arg_u, struct port *port)
 {
 	void *payload, *stream;
 	func();
@@ -1637,14 +1655,14 @@ void cuda_stream_destroy(VirtIOArg *arg_u, struct port *ports)
 	}
 	memcpy(payload, (void*)arg_u, sizeof(VirtIOArg));
 	memcpy(payload+sizeof(VirtIOArg), stream, arg_u->srcSize);
-	send_to_virtio(payload, arg_u->totalSize, sizeof(VirtIOArg), ports);
+	send_to_virtio(port, payload, arg_u->totalSize);
 	gldebug("[+] now analyse return buf\n");
 	gldebug("[+] arg->cmd = %d\n", ((VirtIOArg*)payload)->cmd);
 	arg_u->cmd = ((VirtIOArg*)payload)->cmd;
 	kfree(stream);
 	kfree(payload);
 }
-void cuda_event_create(VirtIOArg *arg_u, struct port *ports)
+void cuda_event_create(VirtIOArg *arg_u, struct port *port)
 {
 	void *in, *payload;
 	func();
@@ -1665,7 +1683,7 @@ void cuda_event_create(VirtIOArg *arg_u, struct port *ports)
 	}
 	memcpy(payload, (void*)arg_u, sizeof(VirtIOArg));
 	memcpy(payload+sizeof(VirtIOArg), (void*)in, arg_u->srcSize);
-	send_to_virtio(payload, arg_u->totalSize, arg_u->totalSize, ports);
+	send_to_virtio(port, payload, arg_u->totalSize);
 	gldebug("[+] now analyse return buf\n");
 	gldebug("[+] arg->cmd = %d\n", ((VirtIOArg*)payload)->cmd);
 	gldebug("[+] arg->flag = %llu\n", ((VirtIOArg*)payload)->flag);
@@ -1674,7 +1692,7 @@ void cuda_event_create(VirtIOArg *arg_u, struct port *ports)
 	//copy_to_user_safe(arg_u->src, payload+ sizeof(VirtIOArg), arg_u->srcSize);
 	kfree(payload);
 }
-void cuda_event_destroy(VirtIOArg *arg_u, struct port *ports)
+void cuda_event_destroy(VirtIOArg *arg_u, struct port *port)
 {
 	void *payload, *in;
 	func();
@@ -1694,13 +1712,13 @@ void cuda_event_destroy(VirtIOArg *arg_u, struct port *ports)
 	}
 	memcpy(payload, (void*)arg_u, sizeof(VirtIOArg));
 	memcpy(payload+sizeof(VirtIOArg), in, arg_u->srcSize);
-	send_to_virtio(payload, arg_u->totalSize, arg_u->totalSize, ports);
+	send_to_virtio(port, payload, arg_u->totalSize);
 	gldebug("[+] now analyse return buf\n");
 	gldebug("[+] arg->cmd = %d\n", ((VirtIOArg*)payload)->cmd);
 	arg_u->cmd = ((VirtIOArg*)payload)->cmd;
 	kfree(payload);
 }
-void cuda_thread_synchronize(VirtIOArg *arg_u, struct port *ports)
+void cuda_thread_synchronize(VirtIOArg *arg_u, struct port *port)
 {
 	void *payload;
 	func();
@@ -1714,14 +1732,14 @@ void cuda_thread_synchronize(VirtIOArg *arg_u, struct port *ports)
 		return;
 	}
 	memcpy(payload, (void*)arg_u, sizeof(VirtIOArg));
-	send_to_virtio(payload, arg_u->totalSize, sizeof(VirtIOArg), ports);
+	send_to_virtio(port, payload, arg_u->totalSize);
 	gldebug("[+] now analyse return buf\n");
 	gldebug("[+] arg->cmd = %d\n", ((VirtIOArg*)payload)->cmd);
 	arg_u->cmd = ((VirtIOArg*)payload)->cmd;
 	kfree(payload);
 }
 
-void cuda_get_last_error(VirtIOArg *arg_u, struct port *ports)
+void cuda_get_last_error(VirtIOArg *arg_u, struct port *port)
 {
 	void *payload;
 	func();
@@ -1735,13 +1753,13 @@ void cuda_get_last_error(VirtIOArg *arg_u, struct port *ports)
 		return;
 	}
 	memcpy(payload, (void*)arg_u, sizeof(VirtIOArg));
-	send_to_virtio(payload, arg_u->totalSize, sizeof(VirtIOArg), ports);
+	send_to_virtio(port, payload, arg_u->totalSize);
 	gldebug("[+] now analyse return buf\n");
 	gldebug("[+] arg->cmd = %d\n", ((VirtIOArg*)payload)->cmd);
 	arg_u->cmd = ((VirtIOArg*)payload)->cmd;
 	kfree(payload);
 }
-void cuda_event_synchronize(VirtIOArg *arg_u, struct port *ports)
+void cuda_event_synchronize(VirtIOArg *arg_u, struct port *port)
 {
 	void *payload;
 	func();
@@ -1755,14 +1773,14 @@ void cuda_event_synchronize(VirtIOArg *arg_u, struct port *ports)
 		return;
 	}
 	memcpy(payload, (void*)arg_u, sizeof(VirtIOArg));
-	send_to_virtio(payload, arg_u->totalSize, sizeof(VirtIOArg), ports);
+	send_to_virtio(port, payload, arg_u->totalSize);
 	gldebug("[+] now analyse return buf\n");
 	gldebug("[+] arg->cmd = %d\n", ((VirtIOArg*)payload)->cmd);
 	arg_u->cmd = ((VirtIOArg*)payload)->cmd;
 	kfree(payload);
 }
 
-void cuda_event_elapsed_time(VirtIOArg *arg_u, struct port *ports)
+void cuda_event_elapsed_time(VirtIOArg *arg_u, struct port *port)
 {
 	void *payload;
 	func();
@@ -1778,7 +1796,7 @@ void cuda_event_elapsed_time(VirtIOArg *arg_u, struct port *ports)
 		return;
 	}
 	memcpy(payload, (void*)arg_u, sizeof(VirtIOArg));
-	send_to_virtio(payload, arg_u->totalSize, arg_u->totalSize, ports);
+	send_to_virtio(port, payload, arg_u->totalSize);
 	gldebug("[+] now analyse return buf\n");
 	gldebug("[+] arg->cmd = %d\n", ((VirtIOArg*)payload)->cmd);
 	arg_u->cmd = ((VirtIOArg*)payload)->cmd;
@@ -1786,7 +1804,7 @@ void cuda_event_elapsed_time(VirtIOArg *arg_u, struct port *ports)
 	copy_to_user_safe(arg_u->dst, payload+ sizeof(VirtIOArg), arg_u->dstSize);
 	kfree(payload);
 }
-void cuda_event_record(VirtIOArg *arg_u, struct port *ports)
+void cuda_event_record(VirtIOArg *arg_u, struct port *port)
 {
 	void *stream, *payload, *event;
 	func();
@@ -1815,7 +1833,7 @@ void cuda_event_record(VirtIOArg *arg_u, struct port *ports)
 	memcpy(payload, (void*)arg_u, sizeof(VirtIOArg));
 	memcpy(payload+sizeof(VirtIOArg), event, arg_u->srcSize);
 	memcpy(payload+sizeof(VirtIOArg)+arg_u->srcSize, stream, arg_u->dstSize);
-	send_to_virtio(payload, arg_u->totalSize, sizeof(VirtIOArg), ports);
+	send_to_virtio(port, payload, arg_u->totalSize);
 	gldebug("[+] now analyse return buf\n");
 	gldebug("[+] arg->cmd = %d\n", ((VirtIOArg*)payload)->cmd);
 	arg_u->cmd = ((VirtIOArg*)payload)->cmd;
@@ -1823,79 +1841,79 @@ void cuda_event_record(VirtIOArg *arg_u, struct port *ports)
 	kfree(stream);
 	kfree(payload);
 }
-void cuda_gpa_to_hva(VirtIOArg *arg_u, struct port *ports)
+
+int cuda_gpa_to_hva(VirtIOArg __user *arg, struct port *port)
 {
-	void *from, *payload;
-	void *gva;
-	void *gpa;
+	uint64_t from;
+	void *gva, *gpa;
 	uint32_t from_size;
+	int ret=0;
 	func();
 
-	gldebug("[+] arg->cmd = %d\n", arg_u->cmd);
-	gldebug("[+] arg->tid = %d\n", arg_u->tid);
-	
-	from = arg_u->src;
-	from_size = arg_u->srcSize;
-	gldebug("from= %p, size= %u\n", (void*)from, from_size);
-
-	gva = kmalloc(from_size, GFP_KERNEL);
-
-	if( from)
-	{ // there is data needed to copy
-		copy_from_user_safe(gva, from, from_size);
+	if(get_user(from, &arg->src)){
+		pr_err("[ERROR] can not get from\n");	
+		return -EFAULT;
 	}
-
-	arg_u->src= (uint64_t)virt_to_phys(gva);
-	gldebug("*gva=%d, &gva=%p, gpa=%p \n",  *(int*)gva, gva, arg_u->src);
-	
-	payload = kmalloc(arg_u->totalSize, GFP_KERNEL);
-	if (!payload) {
-		gldebug("[ERROR] can not malloc 0x%x memory\n", arg_u->totalSize);		
-		return;
+	if(get_user(from_size, &arg->srcSize)){
+		pr_err("[ERROR] can not get from_size\n");	
+		return -EFAULT;
 	}
-	memcpy(payload, (void*)arg_u, sizeof(VirtIOArg));
+	gldebug("arg->src= %p, arg->srcSize= %u\n", arg->src, from_size);
+	gldebug("[+] arg->tid = %d\n", arg->tid);
+
+	gva = memdup_user((const void __user *)(arg->src), (size_t)from_size);
+	if(!gva) {
+		gldebug("[ERROR] can not malloc 0x%x memory\n", from_size);	
+		return -ENOMEM;
+	}
+	arg->src = gpa = (uint64_t)virt_to_phys(gva);
+	gldebug("*gva=%d, &gva=%p, gpa=%p \n",  *(int*)gva, gva, arg->src);
 	
-	send_to_virtio(payload, sizeof(VirtIOArg), sizeof(VirtIOArg), ports);
+
+	// payload = kmemdup(arg, sizeof(VirtIOArg), GFP_KERNEL);
+	// if (!payload) {
+	// 	gldebug("[ERROR] can not malloc 0x%x memory\n", sizeof(VirtIOArg));	
+	// 	// return -ENOMEM;
+	// 	return ;
+	// }
+	
+	ret = send_to_virtio(port, arg, sizeof(VirtIOArg));
 	gldebug("[+] now analyse return buf\n");
-	gldebug("[+] arg->cmd = %d\n", ((VirtIOArg*)payload)->cmd);
-	gpa = ((VirtIOArg*)payload)->src;
-	arg_u->cmd = ((VirtIOArg*)payload)->cmd;
+	gldebug("[+] arg->cmd = %d\n", arg->cmd);
 	gldebug("phys= %p, virt= %p, val=%d, \n", (void*)gpa, \
-		phys_to_virt((phys_addr_t)gpa), *(int*)phys_to_virt((phys_addr_t)gpa));
+		gva, *(int*)phys_to_virt((phys_addr_t)gpa));
 	copy_to_user_safe(from, gva, from_size);
-	kfree(phys_to_virt((phys_addr_t)gpa));
-	//kfree(gva);
-	kfree(payload);
+	// kfree(phys_to_virt((phys_addr_t)gpa));
+	kfree(gva);
+	return ret;
 }
 static long port_fops_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 {
-	struct port *port;
-	long ret;
 	bool nonblock;
+	struct port *port;
+	int ret=0;
+	void __user *argp = (void __user *)arg;
 	func();
 
-	ret = 0;
 	port = filp->private_data;
 	
-	if (!arg)
-		return 0;
+	if (!argp)
+		return -EINVAL;
 
 	nonblock = filp->f_flags & O_NONBLOCK;
-	if(nonblock)
-		return 0;
-
 	ret = wait_port_writable(port, nonblock);
 	if (ret < 0)
-		return 0;
-	pr_info("in cpu: %d\n",smp_processor_id());
-	pr_info("cmd = %u\n", cmd);
-	pr_info("cmd ioctl nr = %u!\n", _IOC_NR(cmd));
+		return ret;
+
+	gldebug("in cpu: %d\n",smp_processor_id());
+	gldebug("cmd ioctl nr = %u!\n", _IOC_NR(cmd));
 	switch(cmd) {
 		case VIRTIO_IOC_HELLO:
 			//ioctl_hello(arg);
 			//return -EFAULT;
-			cuda_gpa_to_hva((VirtIOArg*)arg, port);
+			ret = cuda_gpa_to_hva((void __user*)argp, port);
 			break;
+		/*
 		case VIRTIO_IOC_REGISTERFATBINARY:
 			cuda_register_fatbinary((VirtIOArg*)arg, port);
 			break;
@@ -1963,12 +1981,13 @@ static long port_fops_ioctl(struct file *filp, unsigned int cmd, unsigned long a
 		case VIRTIO_IOC_GETLASTERROR:
 			cuda_get_last_error((VirtIOArg*)arg, port);
 			break;
+		*/
 		default:
 			pr_err("[#] illegel VIRTIO ioctl nr = %u!\n", \
 				_IOC_NR(cmd));
 			return -EINVAL;
 	}
-	return 0;
+	return ret;
 }
 
 /*
@@ -1989,7 +2008,6 @@ static const struct file_operations port_fops = {
 	.fasync = port_fops_fasync,
 	.llseek = no_llseek,
 };
-
 
 /*
  * The put_chars() callback is pretty straightforward.
@@ -2342,7 +2360,7 @@ static void remove_port(struct kref *kref)
 static void remove_port_data(struct port *port)
 {
 	struct port_buffer *buf;
-
+	func();
 	spin_lock_irq(&port->inbuf_lock);
 	/* Remove unused data this port might have received. */
 	discard_port_data(port);
@@ -2768,7 +2786,7 @@ static void remove_controlq_data(struct ports_device *portdev)
 
 	if (!use_multiport(portdev))
 		return;
-
+	func();
 	while ((buf = virtqueue_get_buf(portdev->c_ivq, &len)))
 		free_buf(buf, true);
 
@@ -3027,7 +3045,7 @@ static int virtcons_restore(struct virtio_device *vdev)
 }
 #endif
 
-static struct virtio_driver virtio_console = {
+static struct virtio_driver virtio_cuda_driver = {
 	.feature_table = features,
 	.feature_table_size = ARRAY_SIZE(features),
 	.driver.name =	KBUILD_MODNAME,
@@ -3054,7 +3072,7 @@ static int __init init(void)
 {
 	int err;
 
-	pr_info("virtio cuda installation!\n");
+	pr_info("Hallo virtio cuda!\n");
 	pdrvdata.class = class_create(THIS_MODULE, "virtio-cuda");
 	if (IS_ERR(pdrvdata.class)) {
 		err = PTR_ERR(pdrvdata.class);
@@ -3069,7 +3087,7 @@ static int __init init(void)
 	INIT_LIST_HEAD(&pdrvdata.consoles);
 	INIT_LIST_HEAD(&pdrvdata.portdevs);
 
-	err = register_virtio_driver(&virtio_console);
+	err = register_virtio_driver(&virtio_cuda_driver);
 	if (err < 0) {
 		pr_err("Error %d registering virtio driver\n", err);
 		goto free;
@@ -3088,7 +3106,7 @@ static void __exit fini(void)
 	pr_info("Bye bye virtio cuda!\n");
 	reclaim_dma_bufs();
 
-	unregister_virtio_driver(&virtio_console);
+	unregister_virtio_driver(&virtio_cuda_driver);
 
 	class_destroy(pdrvdata.class);
 	debugfs_remove_recursive(pdrvdata.debugfs_dir);
