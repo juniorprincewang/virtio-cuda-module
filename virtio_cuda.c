@@ -1159,8 +1159,10 @@ int send_to_virtio(struct port *port, void *payload, size_t count)
 	}
 	sg_init_one(sg, data, len);
 	err = __send_to_port(port, sg, 1, len, data, false);
-	if (err)
+	if (err <= 0) {
+		pr_err("[ERROR] send to port error. No data return.\n");
 		return -EINVAL;
+	}
 	kfree(data);
 	gldebug("Finish sending data\n");
 
@@ -1203,35 +1205,6 @@ int send_to_virtio(struct port *port, void *payload, size_t count)
 	return 0;
 }
 
-void cuda_register_fatbinary(VirtIOArg *arg_u, struct port *port)
-{
-	unsigned char *fat, *payload;
-	unsigned int len=0;
-	func();
-	len = sizeof(VirtIOArg);
-	// get fatbinary
-	fat = (char *)kmalloc(arg_u->srcSize,GFP_KERNEL);
-	if (!fat) {
-		pr_err("[ERROR] can not malloc %d memory\n", arg_u->srcSize);		
-		return;
-	}
-	copy_from_user_safe(fat, arg_u->src, arg_u->srcSize);
-	pr_info("[+] arg->cmd = %d\n", arg_u->cmd);
-	pr_info("[+] arg->srcSize = %d\n", arg_u->srcSize);
-	pr_info("[+] arg->tid = %d\n", arg_u->tid);
-	// fill payload
-	payload = kmalloc(arg_u->totalSize, GFP_KERNEL);
-	memcpy(payload, (void*)arg_u, sizeof(VirtIOArg));
-	memcpy(payload + sizeof(VirtIOArg), fat, arg_u->srcSize);
-
-	send_to_virtio(port, payload, len);
-	pr_info("[+] Now analyse return buf\n");
-	pr_info("[+] arg->cmd = %d\n", ((VirtIOArg*)payload)->cmd);
-	arg_u->cmd = ((VirtIOArg*)payload)->cmd;
-	kfree(fat);
-	kfree(payload);
-}
-
 void ioctl_hello(unsigned long arg)
 {
 	int hello=0;
@@ -1241,63 +1214,147 @@ void ioctl_hello(unsigned long arg)
 	copy_to_user((void *)arg, &hello, sizeof(int));
 }
 
-void cuda_unregister_fatbinary(VirtIOArg *arg_u, struct port *port)
+int cuda_gpa_to_hva2(VirtIOArg __user *arg, struct port *port)
 {
-	unsigned char *payload;
-	unsigned int len=0;
+	void *gva, *gpa;
+	VirtIOArg *payload;
+	uint32_t from_size;
+	int ret=0;
 	func();
-	len = sizeof(VirtIOArg);
-	gldebug("[+] arg->cmd = %d\n", arg_u->cmd);
-	// fill payload
-	payload = kmalloc(arg_u->totalSize, GFP_KERNEL);
-	memcpy(payload, (void*)arg_u, sizeof(VirtIOArg));
 
-	send_to_virtio(port, payload, arg_u->totalSize);
-	gldebug("[+] Now analyse return buf\n");
-	gldebug("[+] arg->cmd = %d\n", ((VirtIOArg*)payload)->cmd);
-	arg_u->cmd = ((VirtIOArg*)payload)->cmd;
+	if(get_user(from_size, &arg->srcSize)){
+		pr_err("[ERROR] can not get from_size\n");	
+		return -EFAULT;
+	}
+	gldebug("[+] arg->src= %p, arg->srcSize= %u\n", arg->src, from_size);
+	gldebug("[+] arg->tid = %d\n", arg->tid);
+
+	payload = (VirtIOArg *)memdup_user(arg, arg_len);
+	if(!payload) {
+		pr_err("[ERROR] can not malloc 0x%x memory\n", arg_len);	
+		return -ENOMEM;
+	}
+
+	gva = memdup_user((const void __user *)arg->src, (size_t)from_size);
+	if(!gva) {
+		pr_err("[ERROR] can not malloc 0x%x memory\n", from_size);	
+		return -ENOMEM;
+	}
+	payload->src = gpa = (uint64_t)virt_to_phys(gva);
+	gldebug("*gva=%d, &gva=0x%p, gpa=0x%p \n",  *(int*)gva, gva, gpa);
+	
+	ret = send_to_virtio(port, (void *)payload, arg_len);
+	gldebug("[+]== now analyse return buf ==\n");
+	gldebug("[+] arg->cmd = %d\n", payload->cmd);
+	gldebug("[+] val=%d, virt= 0x%p, phys= 0x%p.\n", \
+		*(int*)phys_to_virt((phys_addr_t)gpa), gva, gpa);
+	copy_to_user_safe((void __user *)arg->src, gva, from_size);
+	put_user(payload->cmd, &arg->cmd);
+	kfree(gva);
 	kfree(payload);
+	return ret;
 }
 
-void cuda_register_function(VirtIOArg *arg_u, struct port *port)
+int cuda_register_fatbinary(VirtIOArg __user *arg, struct port *port)
 {
-	char *fat, *name, *payload;
-	unsigned int len=0;
+	void *gva;
+	VirtIOArg *payload;
+	uint32_t from_size;
+	int ret=0;
 	func();
-	len = sizeof(VirtIOArg);
-	// get fatbinary
-	fat = (char *)kmalloc(arg_u->srcSize,GFP_KERNEL);
-	if (!fat) {
-		gldebug("[ERROR] can not malloc %d memory\n", arg_u->srcSize);		
-		return;
+	
+	if(get_user(from_size, &arg->srcSize)){
+		pr_err("[ERROR] can not get from_size\n");	
+		return -EFAULT;
 	}
-	copy_from_user_safe(fat, arg_u->src, arg_u->srcSize);
-	// get deviceName
-	name = (char *)kmalloc(arg_u->dstSize,GFP_KERNEL);
-	if (!name) {
-		gldebug("[ERROR] can not malloc %d memory\n", arg_u->dstSize);		
-		return;
+
+	payload = (VirtIOArg *)memdup_user(arg, arg_len);
+	if(!payload) {
+		pr_err("[ERROR] can not malloc 0x%x memory\n", arg_len);
+		return -ENOMEM;
 	}
-	copy_from_user_safe(name, arg_u->dst, arg_u->dstSize);
-//	name[arg_u->dstSize-1]=0;
-	gldebug("[+] arg->cmd = %d\n", arg_u->cmd);
-	gldebug("[+] arg->srcSize = %d\n", arg_u->srcSize);
-	gldebug("[+] arg->dstSize = %d\n", arg_u->dstSize);
-	gldebug("[+] deviceName = %s\n", name);
-	// fill payload
-	payload = kmalloc(arg_u->totalSize, GFP_KERNEL);
-	memcpy(payload, (void*)arg_u, sizeof(VirtIOArg));
-	memcpy(payload + sizeof(VirtIOArg), fat, arg_u->srcSize);
-	memcpy(payload + sizeof(VirtIOArg) + arg_u->srcSize, name, arg_u->dstSize);
+	gva = memdup_user((const void __user *)arg->src, (size_t)from_size);
+	if(!gva) {
+		pr_err("[ERROR] can not malloc 0x%x memory\n", from_size);	
+		return -ENOMEM;
+	}
+	payload->src = (uint64_t)virt_to_phys(gva);
 
-	send_to_virtio(port, payload, arg_u->totalSize);
-	gldebug("[+] now analyse return buf\n");
-	gldebug("[+] arg->cmd = %d\n", ((VirtIOArg*)payload)->cmd);
-	arg_u->cmd = ((VirtIOArg*)payload)->cmd;
-
-	kfree(fat);
-	kfree(name);
+	ret = send_to_virtio(port, (void *)payload, arg_len);
+	pr_info("[+] Now analyse return buf\n");
+	pr_info("[+] arg->cmd = %d\n", payload->cmd);
+	put_user(payload->cmd, &arg->cmd);
+	kfree(gva);
 	kfree(payload);
+	return ret;
+}
+
+int cuda_unregister_fatbinary(VirtIOArg __user *arg, struct port *port)
+{
+	VirtIOArg *payload;
+	int ret=0;
+	func();
+
+	payload = (VirtIOArg *)memdup_user(arg, arg_len);
+	if(!payload) {
+		pr_err("[ERROR] can not malloc 0x%x memory\n", arg_len);
+		return -ENOMEM;
+	}
+
+	ret = send_to_virtio(port, (void*)payload, arg_len);
+	gldebug("[+] Now analyse return buf\n");
+	gldebug("[+] arg->cmd = %d\n", payload->cmd);
+	put_user(payload->cmd, &arg->cmd);
+	kfree(payload);
+	return ret;
+}
+
+int cuda_register_function(VirtIOArg __user *arg, struct port *port)
+{
+	VirtIOArg *payload;
+	void *fat, *name;
+	int ret;
+	uint32_t src_size, dst_size;
+	func();
+
+	if(get_user(src_size, &arg->srcSize)){
+		pr_err("[ERROR] can not get src_size\n");	
+		return -EFAULT;
+	}
+
+	if(get_user(dst_size, &arg->dstSize)){
+		pr_err("[ERROR] can not get dst_size\n");	
+		return -EFAULT;
+	}
+
+	payload = (VirtIOArg *)memdup_user(arg, arg_len);
+	if(!payload) {
+		pr_err("[ERROR] can not malloc 0x%x memory\n", arg_len);
+		return -ENOMEM;
+	}
+
+	fat = memdup_user((const void __user *)arg->src, (size_t)src_size);
+	if(!fat) {
+		pr_err("[ERROR] can not malloc 0x%x memory\n", src_size);	
+		return -ENOMEM;
+	}
+	payload->src = (uint64_t)virt_to_phys(fat);
+	name = memdup_user((const void __user *)arg->dst, (size_t)dst_size);
+	if(!name) {
+		pr_err("[ERROR] can not malloc 0x%x memory\n", dst_size);	
+		return -ENOMEM;
+	}
+	payload->dst = (uint64_t)virt_to_phys(name);
+
+	ret = send_to_virtio(port, (void *)payload, arg_len);
+	gldebug("[+] now analyse return buf\n");
+	gldebug("[+] arg->cmd = %d\n", payload->cmd);
+	put_user(payload->cmd, &arg->cmd);
+
+	kfree(name);
+	kfree(fat);
+	kfree(payload);
+	return ret;
 }
 
 void cuda_launch(VirtIOArg *arg_u, struct port *port)
@@ -1877,16 +1934,16 @@ static long port_fops_ioctl(struct file *filp, unsigned int cmd, unsigned long a
 			//ioctl_hello(arg);
 			ret = cuda_gpa_to_hva((void __user*)argp, port);
 			break;
-		/*
 		case VIRTIO_IOC_REGISTERFATBINARY:
-			cuda_register_fatbinary((VirtIOArg*)arg, port);
+			cuda_register_fatbinary((void __user*)arg, port);
 			break;
 		case VIRTIO_IOC_UNREGISTERFATBINARY:
-			cuda_unregister_fatbinary((VirtIOArg*)arg, port);
+			cuda_unregister_fatbinary((void __user*)arg, port);
 			break;
 		case VIRTIO_IOC_REGISTERFUNCTION:
-			cuda_register_function((VirtIOArg*)arg, port);
+			cuda_register_function((void __user*)arg, port);
 			break;
+		/*
 		case VIRTIO_IOC_LAUNCH:
 			cuda_launch((VirtIOArg*)arg, port);
 			break;

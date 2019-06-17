@@ -42,6 +42,7 @@ int main()
 	cudaGetDevice(&devID);
 	printf("[=] After devID is %d\n",  devID);
 	return 0;
+	
 	cudaGetDeviceProperties(&props, devID);
 	printf("Device %d: \"%s\" with Compute %d.%d capability\n",devID, props.name, props.major, props.minor);
 

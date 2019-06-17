@@ -1,5 +1,5 @@
 CUDAPATH=/usr/local/cuda
-COMMONFLAGS=-Wall -fpic -shared -ldl
+COMMONFLAGS=-Wall -fpic -shared -ldl -Wno-multichar
 HOMES=/home/maxwell/virtio-cuda-module/
 
 all:
