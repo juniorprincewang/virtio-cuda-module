@@ -41,6 +41,8 @@
 #include "virtio-ioc.h"
 #include "virtio_cuda.h"
 
+#define arg_len sizeof(VirtIOArg)
+
 #define gldebug(fmt, arg...) printk(KERN_DEBUG fmt, ##arg)
 #define func() pr_info("[FUNC]%s\n",__FUNCTION__)
 #define error(fmt, arg...) pr_err("[ERROR]In file %s, line %d, "fmt, __FILE__, __LINE__, ##arg)
@@ -1139,7 +1141,7 @@ unsigned int copy_to_user_safe(void __user *to, void*from, unsigned long size)
 	return err;
 }
 
-int send_to_virtio(struct port *port, void __user *payload, size_t count)
+int send_to_virtio(struct port *port, void *payload, size_t count)
 {
 	struct scatterlist sg[1];
 	struct port_buffer *buf;
@@ -1147,7 +1149,7 @@ int send_to_virtio(struct port *port, void __user *payload, size_t count)
 	unsigned int err = 0;
 	long ret = 0;
 	long recv = 0;
-	unsigned int len;
+	size_t len;
 	bool nonblock;
 	void *data;
 
@@ -1163,7 +1165,7 @@ int send_to_virtio(struct port *port, void __user *payload, size_t count)
 	// // now copy virtio arguments
 	// copy_from_user((void*)(buf->buf), payload, len);
 
-	data = memdup_user(payload, (size_t)len);
+	data = kmemdup(payload, len, GFP_ATOMIC);
 	if(!data) {
 		pr_err("[ERROR] can not malloc 0x%x memory\n", len);	
 		return -ENOMEM;
@@ -1178,13 +1180,13 @@ int send_to_virtio(struct port *port, void __user *payload, size_t count)
 	 * through to the host.
 	 */
 	nonblock = true;
-	err = __send_to_port(port, sg, 1, len, data, nonblock);
-	if (!nonblock || !err) {
-		ret = -ENOTTY;
-		pr_err("[ERROR]  __send_to_port\n");
-		// goto free_buf;
-		return ret;
-	}
+	err = __send_to_port(port, sg, 1, len, data, false);
+	// if (!nonblock || !err) {
+	// 	ret = -ENOTTY;
+	// 	pr_err("[ERROR]  __send_to_port\n");
+	// 	// goto free_buf;
+	// 	return ret;
+	// }
 	kfree(data);
 	gldebug("Finish sending data\n");
 #if 0
@@ -1846,6 +1848,7 @@ int cuda_gpa_to_hva(VirtIOArg __user *arg, struct port *port)
 {
 	uint64_t from;
 	void *gva, *gpa;
+	VirtIOArg *payload;
 	uint32_t from_size;
 	int ret=0;
 	func();
@@ -1859,15 +1862,21 @@ int cuda_gpa_to_hva(VirtIOArg __user *arg, struct port *port)
 		return -EFAULT;
 	}
 	gldebug("arg->src= %p, arg->srcSize= %u\n", arg->src, from_size);
-	gldebug("[+] arg->tid = %d\n", arg->tid);
+	// gldebug("[+] arg->tid = %d\n", arg->tid);
 
-	gva = memdup_user((const void __user *)(arg->src), (size_t)from_size);
+	payload = (VirtIOArg *)memdup_user(arg, arg_len);
+	if(!payload) {
+		gldebug("[ERROR] can not malloc 0x%x memory\n", arg_len);	
+		return -ENOMEM;
+	}
+
+	gva = memdup_user(from, (size_t)from_size);
 	if(!gva) {
 		gldebug("[ERROR] can not malloc 0x%x memory\n", from_size);	
 		return -ENOMEM;
 	}
-	arg->src = gpa = (uint64_t)virt_to_phys(gva);
-	gldebug("*gva=%d, &gva=%p, gpa=%p \n",  *(int*)gva, gva, arg->src);
+	payload->src = gpa = (uint64_t)virt_to_phys(gva);
+	gldebug("*gva=%d, &gva=%p, gpa=%p \n",  *(int*)gva, gva, gpa);
 	
 
 	// payload = kmemdup(arg, sizeof(VirtIOArg), GFP_KERNEL);
@@ -1877,7 +1886,7 @@ int cuda_gpa_to_hva(VirtIOArg __user *arg, struct port *port)
 	// 	return ;
 	// }
 	
-	ret = send_to_virtio(port, arg, sizeof(VirtIOArg));
+	ret = send_to_virtio(port, payload, arg_len);
 	gldebug("[+] now analyse return buf\n");
 	gldebug("[+] arg->cmd = %d\n", arg->cmd);
 	gldebug("phys= %p, virt= %p, val=%d, \n", (void*)gpa, \
@@ -1910,7 +1919,6 @@ static long port_fops_ioctl(struct file *filp, unsigned int cmd, unsigned long a
 	switch(cmd) {
 		case VIRTIO_IOC_HELLO:
 			//ioctl_hello(arg);
-			//return -EFAULT;
 			ret = cuda_gpa_to_hva((void __user*)argp, port);
 			break;
 		/*
