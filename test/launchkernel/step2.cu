@@ -41,11 +41,11 @@ int main()
 	printf("[=] Before devID is %d\n",  devID);
 	cudaGetDevice(&devID);
 	printf("[=] After devID is %d\n",  devID);
-	return 0;
 	
 	cudaGetDeviceProperties(&props, devID);
 	printf("Device %d: \"%s\" with Compute %d.%d capability\n",devID, props.name, props.major, props.minor);
 
+	return 0;
 	a=(int*)malloc(sizeof(int)*2);
 	a[0]=1;
 	a[1]=2;

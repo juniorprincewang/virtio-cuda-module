@@ -128,7 +128,7 @@ void __cudaUnregisterFatBinary(void **fatCubinHandle)
 	func();
 	memset(&arg, 0, ARG_LEN);
 	arg.cmd = VIRTIO_CUDA_UNREGISTERFATBINARY;
-
+	arg.tid = syscall(SYS_gettid);
 	send_to_device(VIRTIO_IOC_UNREGISTERFATBINARY, &arg);
 	debug("	arg.cmd = %d\n", arg.cmd);
 	close_vdevice();
@@ -169,6 +169,7 @@ void __cudaRegisterFunction(
 	arg.srcSize = fatBinHeader->fatSize + fatBinHeader->headerSize;
 	arg.dst = (uint64_t)deviceName;
 	arg.dstSize = strlen(deviceName)+1; // +1 in order to keep \x00
+	arg.tid = syscall(SYS_gettid);
 	arg.flag = (uint64_t)hostFun;
 	// arg.totalSize = sizeof(VirtIOArg) + arg.srcSize + arg.dstSize;
 	debug("	deviceName = %s\n", (char*)arg.dst);
@@ -363,18 +364,15 @@ cudaError_t cudaGetDevice (int *device)
 
 cudaError_t cudaGetDeviceProperties(struct cudaDeviceProp *prop, int device)
 {
-	func();
 	VirtIOArg arg;
-	// initialize arguments
+	func();
 	memset(&arg, 0, sizeof(VirtIOArg));
 	arg.cmd = VIRTIO_CUDA_GETDEVICEPROPERTIES;
-	arg.dst = (void *)prop;
+	arg.dst = (uint64_t)prop;
 	arg.dstSize = sizeof(struct cudaDeviceProp);
 	arg.flag = device;
 	arg.tid = syscall(SYS_gettid);
-	arg.totalSize = sizeof(VirtIOArg) + arg.dstSize;
 	send_to_device(VIRTIO_IOC_GETDEVICEPROPERTIES, &arg);
-	// do something
 	debug("	arg.cmd = %d\n", arg.cmd);
 	return (cudaError_t)arg.cmd;	
 }
