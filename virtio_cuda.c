@@ -378,7 +378,7 @@ static LIST_HEAD(pending_free_dma_bufs);
 static void free_buf(struct port_buffer *buf, bool can_sleep)
 {
 	unsigned int i;
-	func();
+
 	for (i = 0; i < buf->sgpages; i++) {
 		struct page *page = sg_page(&buf->sg[i]);
 		if (!page)
@@ -406,7 +406,6 @@ static void free_buf(struct port_buffer *buf, bool can_sleep)
 	}
 
 	kfree(buf);
-	func();
 }
 
 static void reclaim_dma_bufs(void)
@@ -1144,26 +1143,14 @@ unsigned int copy_to_user_safe(void __user *to, void*from, unsigned long size)
 int send_to_virtio(struct port *port, void *payload, size_t count)
 {
 	struct scatterlist sg[1];
-	struct port_buffer *buf;
-	unsigned char *out;
 	unsigned int err = 0;
 	long ret = 0;
 	long recv = 0;
 	size_t len;
-	bool nonblock;
 	void *data;
 
 	len = min((size_t)(32 * 1024), count);
 	gldebug("[+] sending %d buffer, actual %d buffer to host\n", count, len);
-	// allocate buf in virtqueue
-	// buf = alloc_buf(port->out_vq, len, 0);
-	// if (!buf) {
-	// 	ret = -ENOMEM;
-	// 	pr_err("[ERROR] alloc_buf\n");
-	// 	return;
-	// }
-	// // now copy virtio arguments
-	// copy_from_user((void*)(buf->buf), payload, len);
 
 	data = kmemdup(payload, len, GFP_ATOMIC);
 	if(!data) {
@@ -1171,25 +1158,12 @@ int send_to_virtio(struct port *port, void *payload, size_t count)
 		return -ENOMEM;
 	}
 	sg_init_one(sg, data, len);
-	// sg_init_one(sg, buf->buf, len);
-	/*
-	 * We now ask send_buf() to not spin for generic ports -- we
-	 * can re-use the same code path that non-blocking file
-	 * descriptors take for blocking file descriptors since the
-	 * wait is already done and we're certain the write will go
-	 * through to the host.
-	 */
-	nonblock = true;
 	err = __send_to_port(port, sg, 1, len, data, false);
-	// if (!nonblock || !err) {
-	// 	ret = -ENOTTY;
-	// 	pr_err("[ERROR]  __send_to_port\n");
-	// 	// goto free_buf;
-	// 	return ret;
-	// }
+	if (err)
+		return -EINVAL;
 	kfree(data);
 	gldebug("Finish sending data\n");
-#if 0
+
 	//now read data from host
 	/* Port is hot-unplugged. */
 	if (!port->guest_connected)
@@ -1202,14 +1176,14 @@ int send_to_virtio(struct port *port, void *payload, size_t count)
 		 * that there's no connection
 		 */
 		if (!port->host_connected)
-			goto free_buf;
+			return -ENODEV;
 		err = wait_event_freezable(port->waitqueue, !will_read_block(port));
 		if (ret < 0)
-			goto free_buf;
+			return -ENODEV;
 	}
 	// Port got hot-unplugged while we were waiting above. 
 	if (!port->guest_connected)
-		goto free_buf;
+		return -ENODEV;
 	/*
 	 * We could've received a disconnection message while we were
 	 * waiting for more data.
@@ -1221,17 +1195,11 @@ int send_to_virtio(struct port *port, void *payload, size_t count)
 	 * check for host_connected.
 	 */
 	if (!port_has_data(port) && !port->host_connected)
-		goto free_buf;
-
-	// out = (unsigned char*)kmalloc(count, GFP_KERNEL);
+		return -ENODEV;
 	// recv = fill_readbuf(port, out , count, false);
-	// recv = fill_readbuf(port, payload, count, true);
-	// gldebug("receiving %zu data\n", recv);
-	// memcpy(payload, out, count);
-	// kfree(out);
-#endif
-// free_buf:
-// 	free_buf(buf, true);
+	recv = fill_readbuf(port, payload, count, false);
+	gldebug("receiving %zu data\n", recv);
+
 	return 0;
 }
 
@@ -1846,54 +1814,42 @@ void cuda_event_record(VirtIOArg *arg_u, struct port *port)
 
 int cuda_gpa_to_hva(VirtIOArg __user *arg, struct port *port)
 {
-	uint64_t from;
 	void *gva, *gpa;
 	VirtIOArg *payload;
 	uint32_t from_size;
 	int ret=0;
 	func();
 
-	if(get_user(from, &arg->src)){
-		pr_err("[ERROR] can not get from\n");	
-		return -EFAULT;
-	}
 	if(get_user(from_size, &arg->srcSize)){
 		pr_err("[ERROR] can not get from_size\n");	
 		return -EFAULT;
 	}
-	gldebug("arg->src= %p, arg->srcSize= %u\n", arg->src, from_size);
-	// gldebug("[+] arg->tid = %d\n", arg->tid);
+	gldebug("[+] arg->src= %p, arg->srcSize= %u\n", arg->src, from_size);
+	gldebug("[+] arg->tid = %d\n", arg->tid);
 
 	payload = (VirtIOArg *)memdup_user(arg, arg_len);
 	if(!payload) {
-		gldebug("[ERROR] can not malloc 0x%x memory\n", arg_len);	
+		pr_err("[ERROR] can not malloc 0x%x memory\n", arg_len);	
 		return -ENOMEM;
 	}
 
-	gva = memdup_user(from, (size_t)from_size);
+	gva = memdup_user((const void __user *)arg->src, (size_t)from_size);
 	if(!gva) {
-		gldebug("[ERROR] can not malloc 0x%x memory\n", from_size);	
+		pr_err("[ERROR] can not malloc 0x%x memory\n", from_size);	
 		return -ENOMEM;
 	}
 	payload->src = gpa = (uint64_t)virt_to_phys(gva);
-	gldebug("*gva=%d, &gva=%p, gpa=%p \n",  *(int*)gva, gva, gpa);
+	gldebug("*gva=%d, &gva=0x%p, gpa=0x%p \n",  *(int*)gva, gva, gpa);
 	
-
-	// payload = kmemdup(arg, sizeof(VirtIOArg), GFP_KERNEL);
-	// if (!payload) {
-	// 	gldebug("[ERROR] can not malloc 0x%x memory\n", sizeof(VirtIOArg));	
-	// 	// return -ENOMEM;
-	// 	return ;
-	// }
-	
-	ret = send_to_virtio(port, payload, arg_len);
-	gldebug("[+] now analyse return buf\n");
-	gldebug("[+] arg->cmd = %d\n", arg->cmd);
-	gldebug("phys= %p, virt= %p, val=%d, \n", (void*)gpa, \
-		gva, *(int*)phys_to_virt((phys_addr_t)gpa));
-	copy_to_user_safe(from, gva, from_size);
-	// kfree(phys_to_virt((phys_addr_t)gpa));
+	ret = send_to_virtio(port, (void *)payload, arg_len);
+	gldebug("[+]== now analyse return buf ==\n");
+	gldebug("[+] arg->cmd = %d\n", payload->cmd);
+	gldebug("[+] val=%d, virt= 0x%p, phys= 0x%p.\n", \
+		*(int*)phys_to_virt((phys_addr_t)gpa), gva, gpa);
+	copy_to_user_safe((void __user *)arg->src, gva, from_size);
+	put_user(payload->cmd, &arg->cmd);
 	kfree(gva);
+	kfree(payload);
 	return ret;
 }
 static long port_fops_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)

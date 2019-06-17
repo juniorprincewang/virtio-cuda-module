@@ -53,10 +53,12 @@ void hello_write(int *var)
 	arg.cmd = VIRTIO_CUDA_HELLO;
 	arg.src = var;
 	arg.srcSize = sizeof(int);
+	arg.tid = syscall(SYS_gettid);
 
 	if(ioctl(fd, VIRTIO_IOC_HELLO, &arg) == -1){
 		error("ioctl when cmd is %d\n", VIRTIO_CUDA_HELLO);
 	}
+	printf("cmd = %d\n", arg.cmd);
 	close_vdevice();
 }
 
