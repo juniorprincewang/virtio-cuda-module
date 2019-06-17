@@ -43,7 +43,6 @@ int fd=-1;
 */
 void send_to_device(int cmd, VirtIOArg *arg)
 {
-	func();
 	if(ioctl(fd, cmd, arg) == -1){
 		error("ioctl when cmd is %d\n", _IOC_NR(cmd));
 	}
@@ -297,53 +296,49 @@ cudaError_t cudaLaunch(const void *entry)
 	debug("	arg.cmd = %d\n", arg.cmd);
 	return (cudaError_t)arg.cmd;	
 }
+
 cudaError_t cudaMemcpy(void *dst, const void *src, size_t count, enum cudaMemcpyKind kind)
 {
-	func();
 	VirtIOArg arg;
+	func();
 	memset(&arg, 0, sizeof(VirtIOArg));
 	arg.cmd = VIRTIO_CUDA_MEMCPY;
 	arg.flag = kind;
-	arg.src = src;
+	arg.src = (uint64_t)src;
 	arg.srcSize = count;
-	arg.dst = dst;
-	arg.dstSize = 0;
-	arg.totalSize = sizeof(VirtIOArg) + arg.srcSize + arg.dstSize;
+	arg.dst = (uint64_t)dst;
+	arg.dstSize = count;
 	arg.tid = syscall(SYS_gettid);
 	send_to_device(VIRTIO_IOC_MEMCPY, &arg);
 	debug("	arg.cmd = %d\n", arg.cmd);
 	return (cudaError_t)arg.cmd;	
 }
+
 cudaError_t cudaMalloc(void **devPtr, size_t size)
 {
-	func();
 	VirtIOArg arg;
+	func();
 	memset(&arg, 0, sizeof(VirtIOArg));
 	arg.cmd = VIRTIO_CUDA_MALLOC;
-	arg.src = NULL;
+	arg.src = (uint64_t)NULL;
 	arg.srcSize = size;
-	arg.totalSize = sizeof(VirtIOArg);
 	arg.tid = syscall(SYS_gettid);
 	send_to_device(VIRTIO_IOC_MALLOC, &arg);
 	*devPtr = arg.dst;
-	debug("devPtr = %p\n", arg.dst);
-	debug("	arg.cmd = %d\n", arg.cmd);
-	
+	debug("arg.cmd = %d\n", arg.cmd);
 	return (cudaError_t)arg.cmd;	
 }
 
 cudaError_t cudaFree (void *devPtr)
 {
-	func();
 	VirtIOArg arg;
+	func();
 	memset(&arg, 0, sizeof(VirtIOArg));
 	arg.cmd = VIRTIO_CUDA_FREE;
-	arg.src = devPtr;
+	arg.src = (uint64_t)devPtr;
 	arg.srcSize = 0;
-	arg.totalSize = sizeof(VirtIOArg);
 	arg.tid = syscall(SYS_gettid);
 	send_to_device(VIRTIO_IOC_FREE, &arg);
-	debug("devPtr = %p\n", arg.src);
 	debug("arg.cmd = %d\n", arg.cmd);
 	return (cudaError_t)arg.cmd;	
 }

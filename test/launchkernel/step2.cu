@@ -38,14 +38,15 @@ int main()
 
 	//cudaGetDeviceCount(&count);
 	//printf("cuda count=%d\n", count);	
+	/*
 	printf("[=] Before devID is %d\n",  devID);
 	cudaGetDevice(&devID);
 	printf("[=] After devID is %d\n",  devID);
 	
 	cudaGetDeviceProperties(&props, devID);
 	printf("Device %d: \"%s\" with Compute %d.%d capability\n",devID, props.name, props.major, props.minor);
-
 	return 0;
+*/
 	a=(int*)malloc(sizeof(int)*2);
 	a[0]=1;
 	a[1]=2;
@@ -53,7 +54,8 @@ int main()
 	cudaMalloc((void**)&d_a, sizeof(int)*2);
 	cudaMemcpy(d_a, a, sizeof(int)*2, cudaMemcpyHostToDevice);
 	printf("a[0] = %d, a[1] = %d\n", a[0], a[1]);
-	kernel<<<blocks, threads>>>(d_a, d_a, d_a);
+
+	// kernel<<<blocks, threads>>>(d_a, d_a, d_a);
 	cudaMemcpy(a, d_a, sizeof(int)*2, cudaMemcpyDeviceToHost);
 	// end
 	printf("a[0] = %d, a[1] = %d\n", a[0], a[1]);
