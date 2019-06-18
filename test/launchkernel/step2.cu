@@ -16,6 +16,18 @@ __global__ void kernel(int *a, int *b, int *c)
 	}
 }
 
+__global__ void kernel2(int *a, int *b, int *c, int *d)
+{
+	int tx = threadIdx.x;
+	a[tx] = a[tx] + 10;
+}
+
+__global__ void kernel3(int *a)
+{
+	int tx = threadIdx.x;
+	a[tx] = a[tx] + 20;
+}
+
 void test()
 {
 	printf("sizeof(cudaEvent_t)=%lu\n", sizeof(cudaEvent_t));
@@ -32,7 +44,7 @@ int main()
 	cudaDeviceProp props;
 	int *d_a;
 	int *a;
-	dim3 threads(2,1);
+	dim3 threads(10,1);
 	dim3 blocks(1,1);
 	//test();
 
@@ -54,11 +66,26 @@ int main()
 	cudaMalloc((void**)&d_a, sizeof(int)*2);
 	cudaMemcpy(d_a, a, sizeof(int)*2, cudaMemcpyHostToDevice);
 	printf("a[0] = %d, a[1] = %d\n", a[0], a[1]);
-
-	// kernel<<<blocks, threads>>>(d_a, d_a, d_a);
+	kernel<<<blocks, threads>>>(d_a, d_a, d_a);
 	cudaMemcpy(a, d_a, sizeof(int)*2, cudaMemcpyDeviceToHost);
 	// end
 	printf("a[0] = %d, a[1] = %d\n", a[0], a[1]);
+
+	cudaMemcpy(d_a, a, sizeof(int)*2, cudaMemcpyHostToDevice);
+	printf("a[0] = %d, a[1] = %d\n", a[0], a[1]);
+	kernel2<<<blocks, threads>>>(d_a, d_a, d_a, d_a);
+	cudaMemcpy(a, d_a, sizeof(int)*2, cudaMemcpyDeviceToHost);
+	// end
+	printf("a[0] = %d, a[1] = %d\n", a[0], a[1]);
+
+	cudaMemcpy(d_a, a, sizeof(int)*2, cudaMemcpyHostToDevice);
+	printf("a[0] = %d, a[1] = %d\n", a[0], a[1]);
+	kernel3<<<blocks, threads>>>(d_a);
+	cudaMemcpy(a, d_a, sizeof(int)*2, cudaMemcpyDeviceToHost);
+	// end
+	printf("a[0] = %d, a[1] = %d\n", a[0], a[1]);
+
+
 	cudaFree(d_a);
 	return 0;
 }

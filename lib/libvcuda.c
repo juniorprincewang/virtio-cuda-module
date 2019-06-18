@@ -32,11 +32,11 @@ typedef struct KernelConf
 	cudaStream_t stream;
 } KernelConf_t ;
 
-uint32_t cudaKernelConf[8];
-uint8_t cudaKernelPara[512];	// uint8_t === unsigned char
-uint32_t cudaParaSize;		// uint32_t == unsigned int
-KernelConf_t kernelConf;
-int fd=-1;
+static uint32_t cudaKernelConf[8];
+static uint8_t cudaKernelPara[512];	// uint8_t === unsigned char
+static uint32_t cudaParaSize;		// uint32_t == unsigned int
+static KernelConf_t kernelConf;
+static int fd=-1;
 
 /*
  * ioctl
@@ -96,7 +96,7 @@ void** __cudaRegisterFatBinary(void *fatCubin)
 		debug("FatBinHeader\n");
 		debug("magic	=	0x%x\n", fatHeader->magic);
 		debug("version	=	0x%x\n", fatHeader->version);
-		debug("headerSize	=	%d(0x%x)\n", fatHeader->headerSize, fatHeader->headerSize);
+		debug("headerSize =	%d(0x%x)\n", fatHeader->headerSize, fatHeader->headerSize);
 		debug("fatSize	=	%lld(0x%llx)\n", fatHeader->fatSize, fatHeader->fatSize);
 		// initialize arguments
 		memset(&arg, 0, ARG_LEN);
@@ -170,10 +170,8 @@ void __cudaRegisterFunction(
 	arg.dstSize = strlen(deviceName)+1; // +1 in order to keep \x00
 	arg.tid = syscall(SYS_gettid);
 	arg.flag = (uint64_t)hostFun;
-	// arg.totalSize = sizeof(VirtIOArg) + arg.srcSize + arg.dstSize;
 	debug("	deviceName = %s\n", (char*)arg.dst);
 	debug("	arg.srcSize = %d\n", arg.srcSize);
-	debug("	arg.totalSize = %d\n", arg.totalSize);
 	debug("	len of deviceName = %d\n", arg.dstSize );
 	send_to_device(VIRTIO_IOC_REGISTERFUNCTION, &arg);
 	debug("	arg.cmd = %d\n", arg.cmd);
@@ -206,10 +204,11 @@ char __cudaInitModule(void **fatCubinHandle)
 	return 'U';
 }
 
-cudaError_t cudaConfigureCall(dim3 gridDim, dim3 blockDim, size_t sharedMem, cudaStream_t stream)
+cudaError_t cudaConfigureCall(
+	dim3 gridDim, dim3 blockDim, size_t sharedMem, cudaStream_t stream)
 {
-	func();
 	VirtIOArg arg;
+	func();
 	debug("gridDim= %u %u %u\n", gridDim.x, gridDim.y, gridDim.z);	
 	debug("blockDim= %u %u %u\n", blockDim.x, blockDim.y, blockDim.z);
 	debug("sharedMem= %zu\n", sharedMem);
@@ -225,33 +224,6 @@ cudaError_t cudaConfigureCall(dim3 gridDim, dim3 blockDim, size_t sharedMem, cud
 	kernelConf.stream = stream;
 // very important
 	return cudaSuccess;
-/*
-	memset(cudaKernelConf, 0, sizeof(unsigned int)*8);
-	cudaKernelConf[0] = gridDim.x;
-	cudaKernelConf[1] = gridDim.y;
-	cudaKernelConf[2] = gridDim.z;
-	cudaKernelConf[3] = blockDim.x;
-	cudaKernelConf[4] = blockDim.y;
-	cudaKernelConf[5] = blockDim.z;
-	cudaKernelConf[6] = sharedMem;
-	cudaKernelConf[7] = (NULL == stream)? (unsigned int)0: (unsigned int)stream;
-*/
-	// initialize arguments
-	memset(&arg, 0, sizeof(VirtIOArg));
-	arg.cmd = VIRTIO_CUDA_CONFIGURECALL;
-//	arg.src = (void*)cudaKernelConf;
-//	arg.srcSize = sizeof(unsigned int)*8;
-	arg.src = (void*)&kernelConf;
-	arg.srcSize = sizeof(KernelConf_t);
-	arg.totalSize = sizeof(VirtIOArg) + sizeof(KernelConf_t);
-
-	// send fatbin to host
-//	send_to_device(VIRTIO_IOC_CONFIGURECALL, &arg);
-
-
-
-	debug("	arg.cmd = %d\n", arg.cmd);
-	return arg.cmd;	
 }
 
 cudaError_t cudaSetupArgument(const void* arg, size_t size, size_t offset)
@@ -264,7 +236,6 @@ cudaError_t cudaSetupArgument(const void* arg, size_t size, size_t offset)
 	cudaKernelPara format
 	| #arg | arg1 size| arg1 | arg2 size | arg2 ...|
 */
-	//memcpy();
 	memcpy(&cudaKernelPara[cudaParaSize], &size, sizeof(uint32_t));
 	debug("size = %u\n", *(uint32_t*)&cudaKernelPara[cudaParaSize]);
 	cudaParaSize += sizeof(uint32_t);
@@ -273,26 +244,22 @@ cudaError_t cudaSetupArgument(const void* arg, size_t size, size_t offset)
 	debug("value = %llx\n", *(unsigned long long*)&cudaKernelPara[cudaParaSize]);
 	cudaParaSize += size;
 	(*((uint32_t*)cudaKernelPara))++;
-
 	return cudaSuccess;
 }
 
 cudaError_t cudaLaunch(const void *entry)
 {
-	func();
 	VirtIOArg arg;
+	func();
 	memset(&arg, 0, sizeof(VirtIOArg));
 	arg.cmd = VIRTIO_CUDA_LAUNCH;
-	arg.src = (void*)&cudaKernelPara;
+	arg.src = (uint64_t)&cudaKernelPara;
 	arg.srcSize = cudaParaSize;
-	arg.dst = (void*)&kernelConf;
+	arg.dst = (uint64_t)&kernelConf;
 	arg.dstSize = sizeof(KernelConf_t);
-	arg.totalSize = sizeof(VirtIOArg) + arg.srcSize + arg.dstSize;
 	arg.flag = (uint64_t)entry;
 	arg.tid = syscall(SYS_gettid);
 	send_to_device(VIRTIO_IOC_LAUNCH, &arg);
-	
-	//return cudaSuccess;
 	debug("	arg.cmd = %d\n", arg.cmd);
 	return (cudaError_t)arg.cmd;	
 }
@@ -324,7 +291,7 @@ cudaError_t cudaMalloc(void **devPtr, size_t size)
 	arg.srcSize = size;
 	arg.tid = syscall(SYS_gettid);
 	send_to_device(VIRTIO_IOC_MALLOC, &arg);
-	*devPtr = arg.dst;
+	*devPtr = (void *)arg.dst;
 	debug("arg.cmd = %d\n", arg.cmd);
 	return (cudaError_t)arg.cmd;	
 }
