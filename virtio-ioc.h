@@ -1,7 +1,7 @@
 #ifndef VIRTCR_IOC_H
 #define VIRTCR_IOC_H
 
-// #define VIRTIO_CUDA_DEBUG
+#define VIRTIO_CUDA_DEBUG
 
 #ifndef __KERNEL__
 #define __user
@@ -40,6 +40,7 @@
 #define VIRTIO_CUDA_THREADSYNCHRONIZE 22
 #define VIRTIO_CUDA_GETLASTERROR 23
 
+#define VIRTIO_CUDA_MEMCPY_ASYNC 24
 #else
 
 #include <linux/ioctl.h>
@@ -72,8 +73,6 @@ typedef struct VirtIOArg
 	uint32_t dstSize;
 	uint64_t flag;
 	uint64_t param;
-	uint32_t totalSize;
-
 } VirtIOArg;
 /* see ioctl-number in https://github.com/torvalds/
 	linux/blob/master/Documentation/ioctl/ioctl-number.txt
@@ -135,5 +134,7 @@ typedef struct VirtIOArg
 #define VIRTIO_IOC_GETLASTERROR \
 	_IOWR(VIRTIO_IOC_ID,23,VirtIOArg)
 
+#define VIRTIO_IOC_MEMCPY_ASYNC \
+	_IOWR(VIRTIO_IOC_ID,24,VirtIOArg)
 
 #endif

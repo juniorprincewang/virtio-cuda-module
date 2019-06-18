@@ -291,6 +291,30 @@ cudaError_t cudaMemcpy(void *dst, const void *src, size_t count, enum cudaMemcpy
 	return (cudaError_t)arg.cmd;	
 }
 
+cudaError_t cudaMemcpyAsync(
+			void *dst, 
+			const void *src, 
+			size_t count, 
+			enum cudaMemcpyKind kind,
+			cudaStream_t stream
+			)
+{
+	VirtIOArg arg;
+	func();
+	memset(&arg, 0, sizeof(VirtIOArg));
+	arg.cmd = VIRTIO_CUDA_MEMCPY_ASYNC;
+	arg.flag = kind;
+	arg.src = (uint64_t)src;
+	arg.srcSize = count;
+	arg.dst = (uint64_t)dst;
+	arg.dstSize = count;
+	arg.param = (uint64_t)stream;
+	arg.tid = syscall(SYS_gettid);
+	send_to_device(VIRTIO_IOC_MEMCPY_ASYNC, &arg);
+	debug("	arg.cmd = %d\n", arg.cmd);
+	return (cudaError_t)arg.cmd;	
+}
+
 cudaError_t cudaMalloc(void **devPtr, size_t size)
 {
 	VirtIOArg arg;
@@ -351,31 +375,25 @@ cudaError_t cudaGetDeviceProperties(struct cudaDeviceProp *prop, int device)
 
 cudaError_t cudaSetDevice(int device)
 {
-	func();
 	VirtIOArg arg;
-	// initialize arguments
+	func();
 	memset(&arg, 0, sizeof(VirtIOArg));
 	arg.cmd = VIRTIO_CUDA_SETDEVICE;
 	arg.flag = device;
 	arg.tid = syscall(SYS_gettid);
-	arg.totalSize = sizeof(VirtIOArg) ;
 	send_to_device(VIRTIO_IOC_SETDEVICE, &arg);
-	// do something
 	debug("	arg.cmd = %d\n", arg.cmd);
 	return (cudaError_t)arg.cmd;	
 }
 
 cudaError_t cudaGetDeviceCount(int *count)
 {
-	func();
 	VirtIOArg arg;
-	// initialize arguments
+	func();
 	memset(&arg, 0, sizeof(VirtIOArg));
 	arg.cmd = VIRTIO_CUDA_GETDEVICECOUNT;
 	arg.tid = syscall(SYS_gettid);
-	arg.totalSize = sizeof(VirtIOArg);
 	send_to_device(VIRTIO_IOC_GETDEVICECOUNT, &arg);
-	// do something
 	*count = arg.flag;
 	debug("	arg.cmd = %d\n", arg.cmd);
 	return (cudaError_t)arg.cmd;	
@@ -383,160 +401,117 @@ cudaError_t cudaGetDeviceCount(int *count)
 
 cudaError_t cudaDeviceReset(void)
 {
-	func();
 	VirtIOArg arg;
-	// initialize arguments
+	func();
 	memset(&arg, 0, sizeof(VirtIOArg));
 	arg.cmd = VIRTIO_CUDA_DEVICERESET;
 	arg.tid = syscall(SYS_gettid);
-	arg.totalSize = sizeof(VirtIOArg) ;
 	send_to_device(VIRTIO_IOC_DEVICERESET, &arg);
-	// do something
 	debug("	arg.cmd = %d\n", arg.cmd);
 	return (cudaError_t)arg.cmd;	
 }
 
 cudaError_t cudaStreamCreate(cudaStream_t *pStream)
 {
-	func();
 	VirtIOArg arg;
-	// initialize arguments
+	func();
 	memset(&arg, 0, sizeof(VirtIOArg));
 	arg.cmd = VIRTIO_CUDA_STREAMCREATE;
 	arg.tid = syscall(SYS_gettid);
-	arg.src = (void*)pStream;
-	arg.srcSize = sizeof(cudaStream_t);
-	arg.totalSize = sizeof(VirtIOArg) + arg.srcSize;
 	send_to_device(VIRTIO_IOC_STREAMCREATE, &arg);
-	// do something
-	//*pStream = (cudaStream_t)arg.flag;
+	*pStream = (cudaStream_t)arg.flag;
 	debug("	arg.cmd = %d\n", arg.cmd);
 	return (cudaError_t)arg.cmd;	
 }
 
 cudaError_t cudaStreamDestroy(cudaStream_t stream)
 {
-	func();
 	VirtIOArg arg;
-	// initialize arguments
+	func();
 	memset(&arg, 0, sizeof(VirtIOArg));
 	arg.cmd = VIRTIO_CUDA_STREAMDESTROY;
 	arg.flag = (uint64_t)stream;
-	arg.src = &stream;
-	arg.srcSize = sizeof(cudaStream_t);
 	arg.tid = syscall(SYS_gettid);
-	arg.totalSize = sizeof(VirtIOArg) + arg.srcSize;
 	send_to_device(VIRTIO_IOC_STREAMDESTROY, &arg);
-	// do something
 	debug("	arg.cmd = %d\n", arg.cmd);
 	return (cudaError_t)arg.cmd;	
 }
+
 cudaError_t cudaEventCreate(cudaEvent_t *event)
 {
-	func();
 	VirtIOArg arg;
-	// initialize arguments
+	func();
 	memset(&arg, 0, sizeof(VirtIOArg));
 	arg.cmd = VIRTIO_CUDA_EVENTCREATE;
-	arg.src = event;
-	arg.srcSize = sizeof(cudaEvent_t);
 	arg.tid = syscall(SYS_gettid);
-	arg.totalSize = sizeof(VirtIOArg) + arg.srcSize;
 	send_to_device(VIRTIO_IOC_EVENTCREATE, &arg);
-	// do something
 	 *event = (void*)(arg.flag);
 	debug("	arg.cmd = %d\n", arg.cmd);
 	return (cudaError_t)arg.cmd;	
 }
+
 cudaError_t cudaEventDestroy(cudaEvent_t event)
 {
-	func();
 	VirtIOArg arg;
-	// initialize arguments
+	func();
 	memset(&arg, 0, sizeof(VirtIOArg));
 	arg.cmd = VIRTIO_CUDA_EVENTDESTROY;
 	arg.flag = (uint64_t)event;
 	arg.tid = syscall(SYS_gettid);
-	arg.src = &event;
-	arg.srcSize = sizeof(cudaEvent_t);
-	arg.totalSize = sizeof(VirtIOArg) +arg.srcSize;
 	send_to_device(VIRTIO_IOC_EVENTDESTROY, &arg);
-	// do something
 	debug("	arg.cmd = %d\n", arg.cmd);
 	return (cudaError_t)arg.cmd;	
 }
+
 cudaError_t cudaEventRecord(cudaEvent_t event, cudaStream_t stream)
 {
-	func();
 	VirtIOArg arg;
-	// initialize arguments
+	func();
 	memset(&arg, 0, sizeof(VirtIOArg));
 	arg.cmd = VIRTIO_CUDA_EVENTRECORD;
 	debug("event = %lu\n", (uint64_t)event);
-	arg.src = &event;
-	arg.param = (uint64_t)event;
-	arg.srcSize = sizeof(cudaEvent_t); // sizeof(cudaEvent_t) = sizeof(uint64_t) = 8
+	arg.src = (uint64_t)event;
 	if(NULL == stream)
-		arg.flag = (uint64_t)(-1);
+		arg.dst = (uint64_t)(-1);
 	else
-	{
-		arg.flag = (uint64_t)stream;
-		arg.dst = &stream;
-		arg.dstSize = sizeof(cudaStream_t); // sizeof(cudaStream_t) = sizeof(uint64_t) = 8
-	}
+		arg.dst = (uint64_t)stream;
 	arg.tid = syscall(SYS_gettid);
-	arg.totalSize = sizeof(VirtIOArg) +arg.srcSize + arg.dstSize;
 	send_to_device(VIRTIO_IOC_EVENTRECORD, &arg);
 	// do something
 	debug("	arg.cmd = %d\n", arg.cmd);
 	return (cudaError_t)arg.cmd;	
 }
+
 cudaError_t cudaEventSynchronize(cudaEvent_t event)
 {
 	VirtIOArg arg;
 	func();
-	// initialize arguments
 	memset(&arg, 0, sizeof(VirtIOArg));
 	arg.cmd = VIRTIO_CUDA_EVENTSYNCHRONIZE;
 	arg.flag = (uint64_t)event;
 	arg.tid = syscall(SYS_gettid);
-	arg.totalSize = sizeof(VirtIOArg) ;
 	send_to_device(VIRTIO_IOC_EVENTSYNCHRONIZE, &arg);
-	// do something
 	debug("	arg.cmd = %d\n", arg.cmd);
 	return (cudaError_t)arg.cmd;	
 }
+
 cudaError_t cudaEventElapsedTime(float *ms, cudaEvent_t start, cudaEvent_t end)
 {
 	VirtIOArg arg;
 	func();
-	// initialize arguments
 	memset(&arg, 0, sizeof(VirtIOArg));
 	arg.cmd = VIRTIO_CUDA_EVENTELAPSEDTIME;
 	arg.tid = syscall(SYS_gettid);
-	arg.flag = (uint64_t)start;
-	arg.param = (uint64_t)end;
-	arg.dst = (void*)ms;
-	arg.dstSize = sizeof(float);
-	arg.totalSize = sizeof(VirtIOArg) + arg.dstSize;
+	arg.src = (uint64_t)start;
+	arg.dst = (uint64_t)end;
 	send_to_device(VIRTIO_IOC_EVENTELAPSEDTIME, &arg);
-	// do something
 	debug("	arg.cmd = %d\n", arg.cmd);
+	*ms = (float)arg.flag;
 	return (cudaError_t)arg.cmd;	
 }
 cudaError_t cudaThreadSynchronize()
 {
 	func();
-	VirtIOArg arg;
-	// initialize arguments
-	memset(&arg, 0, sizeof(VirtIOArg));
-	arg.cmd = VIRTIO_CUDA_THREADSYNCHRONIZE;
-	arg.tid = syscall(SYS_gettid);
-	arg.totalSize = sizeof(VirtIOArg) ;
-	send_to_device(VIRTIO_IOC_THREADSYNCHRONIZE, &arg);
-	// do something
-	debug("	arg.cmd = %d\n", arg.cmd);
-	return (cudaError_t)arg.cmd;	
 }
 cudaError_t cudaGetLastError(void)
 {
