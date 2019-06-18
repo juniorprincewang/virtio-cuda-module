@@ -43,10 +43,17 @@
 
 #define arg_len sizeof(VirtIOArg)
 
+// #define VIRTIO_CUDA_DEBUG
+
+#ifdef VIRTIO_CUDA_DEBUG
 #define gldebug(fmt, arg...) printk(KERN_DEBUG fmt, ##arg)
 #define func() pr_info("[FUNC]%s\n",__FUNCTION__)
-#define error(fmt, arg...) pr_err("[ERROR]In file %s, line %d, "fmt, __FILE__, __LINE__, ##arg)
-#define debug(fmt, arg...) pr_debug("[DEBUG] "fmt, ##arg)
+
+#else
+#define gldebug(fmt, arg...) 
+#define func() 
+#endif
+
 #define cudaError(err) __cudaErrorCheck(err, __LINE__)
 
 #define is_rproc_enabled IS_ENABLED(CONFIG_REMOTEPROC)
@@ -1209,7 +1216,7 @@ void ioctl_hello(unsigned long arg)
 {
 	int hello=0;
 	copy_from_user(&hello, (void *)arg, sizeof(int));
-	pr_info("ioctl hello = %d\n", hello);
+	gldebug("ioctl hello = %d\n", hello);
 	hello+=1;
 	copy_to_user((void *)arg, &hello, sizeof(int));
 }
@@ -1281,8 +1288,8 @@ int cuda_register_fatbinary(VirtIOArg __user *arg, struct port *port)
 	payload->src = (uint64_t)virt_to_phys(gva);
 
 	ret = send_to_virtio(port, (void *)payload, arg_len);
-	pr_info("[+] Now analyse return buf\n");
-	pr_info("[+] arg->cmd = %d\n", payload->cmd);
+	gldebug("[+] Now analyse return buf\n");
+	gldebug("[+] arg->cmd = %d\n", payload->cmd);
 	put_user(payload->cmd, &arg->cmd);
 	kfree(gva);
 	kfree(payload);
@@ -1579,7 +1586,7 @@ void cuda_get_device_count(VirtIOArg *arg_u, struct port *port)
 
 	payload = kmalloc(arg_u->totalSize, GFP_KERNEL);
 	if (!payload) {
-		gldebug("[ERROR] can not malloc 0x%x memory\n", arg_u->totalSize);		
+		pr_err("[ERROR] can not malloc 0x%x memory\n", arg_u->totalSize);		
 		return;
 	}
 	memcpy(payload, (void*)arg_u, sizeof(VirtIOArg));
@@ -1627,6 +1634,27 @@ int cuda_get_device(VirtIOArg __user *arg, struct port *port)
 	kfree(payload);
 	return ret;
 }
+
+int cuda_get_last_error(VirtIOArg __user *arg, struct port *port)
+{
+	VirtIOArg *payload;
+	int ret;
+	func();
+
+	payload = (VirtIOArg *)memdup_user(arg, arg_len);
+	if(!payload) {
+		pr_err("[ERROR] can not malloc 0x%lx memory\n", arg_len);
+		return -ENOMEM;
+	}
+
+	ret = send_to_virtio(port, (void*)payload, arg_len);
+	gldebug("[+] now analyse return buf\n");
+	gldebug("[+] arg->cmd = %d\n", payload->cmd);
+	put_user(payload->cmd, &arg->cmd);
+	kfree(payload);
+	return ret;
+}
+
 void cuda_set_device(VirtIOArg *arg_u, struct port *port)
 {
 	void *payload;
@@ -1825,26 +1853,7 @@ void cuda_thread_synchronize(VirtIOArg *arg_u, struct port *port)
 	kfree(payload);
 }
 
-void cuda_get_last_error(VirtIOArg *arg_u, struct port *port)
-{
-	void *payload;
-	func();
 
-	gldebug("[+] arg->cmd = %d\n", arg_u->cmd);
-	gldebug("[+] arg->tid = %d\n", arg_u->tid);
-
-	payload = kmalloc(arg_u->totalSize, GFP_KERNEL);
-	if (!payload) {
-		gldebug("[ERROR] can not malloc 0x%x memory\n", arg_u->totalSize);		
-		return;
-	}
-	memcpy(payload, (void*)arg_u, sizeof(VirtIOArg));
-	send_to_virtio(port, payload, arg_u->totalSize);
-	gldebug("[+] now analyse return buf\n");
-	gldebug("[+] arg->cmd = %d\n", ((VirtIOArg*)payload)->cmd);
-	arg_u->cmd = ((VirtIOArg*)payload)->cmd;
-	kfree(payload);
-}
 void cuda_event_synchronize(VirtIOArg *arg_u, struct port *port)
 {
 	void *payload;
@@ -2058,10 +2067,10 @@ static long port_fops_ioctl(struct file *filp, unsigned int cmd, unsigned long a
 		case VIRTIO_IOC_EVENTRECORD:
 			cuda_event_record((VirtIOArg*)arg, port);
 			break;
-		case VIRTIO_IOC_GETLASTERROR:
-			cuda_get_last_error((VirtIOArg*)arg, port);
-			break;
 		*/
+		case VIRTIO_IOC_GETLASTERROR:
+			cuda_get_last_error((VirtIOArg __user*)arg, port);
+			break;
 		default:
 			pr_err("[#] illegel VIRTIO ioctl nr = %u!\n", \
 				_IOC_NR(cmd));

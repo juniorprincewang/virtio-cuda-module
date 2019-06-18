@@ -16,10 +16,21 @@
 #include <errno.h>
 
 #define DEVICE_PATH "/dev/cudaport2p1"
+
+// #define VIRTIO_CUDA_DEBUG
+
+#ifdef VIRTIO_CUDA_DEBUG
 #define error(fmt, arg...) printf("[ERROR]: %s->line : %d. "fmt, __FUNCTION__, __LINE__, ##arg)
 #define debug(fmt, arg...) printf("[DEBUG]: "fmt, ##arg)
-#define print(fmt, arg...) printf("[+]INFO: "fmt, ##arg)
 #define func() printf("[FUNC] Now in %s\n", __FUNCTION__);
+#else
+
+#define error(fmt, arg...) 
+#define debug(fmt, arg...) 
+#define func() 
+
+#endif
+
 #define MODE O_RDWR
 
 #define ARG_LEN sizeof(VirtIOArg)
@@ -32,7 +43,6 @@ typedef struct KernelConf
 	cudaStream_t stream;
 } KernelConf_t ;
 
-static uint32_t cudaKernelConf[8];
 static uint8_t cudaKernelPara[512];	// uint8_t === unsigned char
 static uint32_t cudaParaSize;		// uint32_t == unsigned int
 static KernelConf_t kernelConf;
@@ -207,7 +217,7 @@ char __cudaInitModule(void **fatCubinHandle)
 cudaError_t cudaConfigureCall(
 	dim3 gridDim, dim3 blockDim, size_t sharedMem, cudaStream_t stream)
 {
-	VirtIOArg arg;
+	// VirtIOArg arg;
 	func();
 	debug("gridDim= %u %u %u\n", gridDim.x, gridDim.y, gridDim.z);	
 	debug("blockDim= %u %u %u\n", blockDim.x, blockDim.y, blockDim.z);
@@ -530,15 +540,12 @@ cudaError_t cudaThreadSynchronize()
 }
 cudaError_t cudaGetLastError(void)
 {
-	func();
 	VirtIOArg arg;
-	// initialize arguments
+	func();
 	memset(&arg, 0, sizeof(VirtIOArg));
 	arg.cmd = VIRTIO_CUDA_GETLASTERROR;
 	arg.tid = syscall(SYS_gettid);
-	arg.totalSize = sizeof(VirtIOArg) ;
 	send_to_device(VIRTIO_IOC_GETLASTERROR, &arg);
-	// do something
 	debug("	arg.cmd = %d\n", arg.cmd);
 	return (cudaError_t)arg.cmd;	
 }
