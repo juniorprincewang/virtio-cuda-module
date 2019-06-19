@@ -78,7 +78,107 @@ LD_PRELOAD=\path\to\libvcuda.so ./vectorAdd
 In our current version, we implement necessary CUDA runtime APIs. These CUDA 
 runtime API are shown as below:  
 
-
+<table class="tg">
+  <tr>
+    <th class="tg-yw4l">Classification</th>
+    <th class="tg-yw4l">supported CUDA runtime API</th>
+  </tr>
+  <tr>
+    <td class="tg-yw4l" rowspan="5">Memory Management</td>
+    <td class="tg-3we0">cudaMalloc</td>
+  </tr>
+  <tr>
+    <td class="tg-3we0">--cudaMemset</td>
+  </tr>
+  <tr>
+    <td class="tg-3we0">cudaMemcpy</td>
+  </tr>
+  <tr>
+    <td class="tg-3we0">cudaMemcpyAsync</td>
+  </tr>
+  <tr>
+    <td class="tg-3we0">cudaFree</td>
+  </tr>
+  <tr>
+    <td class="tg-yw4l" rowspan="6">Device Management</td>
+    <td class="tg-3we0">cudaGetDevice</td>
+  </tr>
+  <tr>
+    <td class="tg-3we0">cudaGetDeviceCount</td>
+  </tr>
+  <tr>
+    <td class="tg-3we0">cudaSetDevice</td>
+  </tr>
+  <tr>
+    <td class="tg-3we0">cudaGetDeviceProperties</td>
+  </tr>
+  <tr>
+    <td class="tg-3we0">--cudaDeviceSynchronize</td>
+  </tr>
+  <tr>
+    <td class="tg-3we0">cudaDeviceReset</td>
+  </tr>
+  <tr>
+    <td class="tg-yw4l" rowspan="2">Stream Management</td>
+    <td class="tg-3we0">cudaStreamCreate</td>
+  </tr>
+  <tr>
+    <td class="tg-3we0">cudaStreamDestroy</td>
+  </tr>
+  <tr>
+    <td class="tg-yw4l" rowspan="6">Event Management</td>
+    <td class="tg-3we0">cudaEventCreate</td>
+  </tr>
+  <tr>
+    <td class="tg-3we0">--cudaEventCreateWithFlags</td>
+  </tr>
+  <tr>
+    <td class="tg-3we0">cudaEventRecord</td>
+  </tr>
+  <tr>
+    <td class="tg-3we0">cudaEventSynchronize</td>
+  </tr>
+  <tr>
+    <td class="tg-3we0">cudaEventElapsedTime</td>
+  </tr>
+  <tr>
+    <td class="tg-3we0">cudaEventDestroy</td>
+  </tr>
+  <tr>
+    <td class="tg-yw4l">Error Handling</td>
+    <td class="tg-3we0">cudaGetLastError</td>
+  </tr>
+  <tr>
+    <td class="tg-yw4l" rowspan="4">Zero-copy</td>
+    <td class="tg-3we0">--cudaHostRegister</td>
+  </tr>
+  <tr>
+    <td class="tg-3we0">--cudaHostGetDevicePointer</td>
+  </tr>
+  <tr>
+    <td class="tg-3we0">--cudaHostUnregister</td>
+  </tr>
+  <tr>
+    <td class="tg-3we0">--cudaSetDeviceFlags</td>
+  </tr>
+  <tr>
+    <td class="tg-yw4l">Thread Management</td>
+    <td class="tg-3we0">cudaThreadSynchronize</td>
+  </tr>
+  <tr>
+    <td class="tg-yw4l" rowspan="4">Module &amp; Execution Control</td>
+    <td class="tg-3we0">cudaRegisterFatBinary</td>
+  </tr>
+  <tr>
+    <td class="tg-3we0">cudaUnregisterFatBinary</td>
+  </tr>
+  <tr>
+    <td class="tg-3we0">cudaRegisterFunction</td>
+  </tr>
+  <tr>
+    <td class="tg-3we0">cudaLaunch</td>
+  </tr>
+</table>
 
 
 Last but not least, thanks [qcuda](https://github.com/coldfunction/qCUDA) for inspiring.
