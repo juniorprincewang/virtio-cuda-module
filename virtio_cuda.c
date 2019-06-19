@@ -1589,6 +1589,26 @@ int cuda_memcpy_async(VirtIOArg __user *arg, struct port *port)
 	}
 }
 
+int cuda_memset(VirtIOArg __user *arg, struct port *port)
+{
+	VirtIOArg *payload;
+	int ret = 0;
+	func();
+	gldebug("dst=0x%lx, value=%lu, count=%lu\n", \
+			arg->dst, arg->param, arg->dstSize);
+	payload = (VirtIOArg *)memdup_user(arg, arg_len);
+	if(!payload) {
+		pr_err("[ERROR] can not malloc 0x%x memory\n", arg_len);
+		return -ENOMEM;
+	}
+	ret = send_to_virtio(port, (void *)payload, arg_len);
+	gldebug("[+] now analyse return buf\n");
+	gldebug("[+] arg->cmd = %d\n", payload->cmd);
+	put_user(payload->cmd, &arg->cmd);
+	kfree(payload);
+	return ret;
+}
+
 int cuda_free(VirtIOArg __user *arg, struct port *port)
 {
 	VirtIOArg *payload;
@@ -1766,6 +1786,26 @@ int cuda_device_reset(VirtIOArg __user *arg, struct port *port)
 	return ret;
 }
 
+int cuda_device_synchronize(VirtIOArg __user *arg, struct port *port)
+{
+	VirtIOArg *payload;
+	int ret;
+	func();
+
+	payload = (VirtIOArg *)memdup_user(arg, arg_len);
+	if(!payload) {
+		pr_err("[ERROR] can not malloc 0x%lx memory\n", arg_len);
+		return -ENOMEM;
+	}
+
+	ret = send_to_virtio(port, (void*)payload, arg_len);
+	gldebug("[+] now analyse return buf\n");
+	gldebug("[+] arg->cmd = %d\n", payload->cmd);
+	put_user(payload->cmd, &arg->cmd);
+	kfree(payload);
+	return ret;
+}
+
 int cuda_stream_create(VirtIOArg __user *arg, struct port *port)
 {
 	VirtIOArg *payload;
@@ -1824,6 +1864,27 @@ int cuda_event_create(VirtIOArg __user *arg, struct port *port)
 	gldebug("[+] arg->cmd = %d\n", payload->cmd);
 	put_user(payload->cmd, &arg->cmd);
 	put_user(payload->flag, &arg->flag);
+	kfree(payload);
+	return ret;
+}
+
+int cuda_event_create_with_flags(VirtIOArg __user *arg, struct port *port)
+{
+	VirtIOArg *payload;
+	int ret;
+	func();
+
+	payload = (VirtIOArg *)memdup_user(arg, arg_len);
+	if(!payload) {
+		pr_err("[ERROR] can not malloc 0x%lx memory\n", arg_len);
+		return -ENOMEM;
+	}
+
+	ret = send_to_virtio(port, (void*)payload, arg_len);
+	gldebug("[+] now analyse return buf\n");
+	gldebug("[+] arg->cmd = %d\n", payload->cmd);
+	put_user(payload->cmd, &arg->cmd);
+	put_user(payload->dst, &arg->dst);
 	kfree(payload);
 	return ret;
 }
@@ -2066,6 +2127,15 @@ static long port_fops_ioctl(struct file *filp, unsigned int cmd, unsigned long a
 			break;
 		case VIRTIO_IOC_MEMCPY_ASYNC:
 			cuda_memcpy_async((VirtIOArg __user*)arg, port);
+			break;
+		case VIRTIO_IOC_MEMSET:
+			cuda_memset((VirtIOArg __user*)arg, port);
+			break;
+		case VIRTIO_IOC_DEVICESYNCHRONIZE:
+			cuda_device_synchronize((VirtIOArg __user*)arg, port);
+			break;
+		case VIRTIO_IOC_EVENTCREATEWITHFLAGS:
+			cuda_event_create_with_flags((VirtIOArg __user*)arg, port);
 			break;
 		default:
 			pr_err("[#] illegel VIRTIO ioctl nr = %u!\n", \

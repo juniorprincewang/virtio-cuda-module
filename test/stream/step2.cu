@@ -16,7 +16,7 @@ int main()
 	dim3 blocks(1,1);
 	int nstreams = 5;
 	int i;
-	int nreps = 10;
+	int nreps = 10000;
 	// create CUDA event handles
     // use blocking sync
     cudaEvent_t start_event, stop_event;

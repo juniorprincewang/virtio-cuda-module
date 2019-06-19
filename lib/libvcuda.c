@@ -286,6 +286,20 @@ cudaError_t cudaMemcpy(void *dst, const void *src, size_t count, enum cudaMemcpy
 	return (cudaError_t)arg.cmd;	
 }
 
+cudaError_t cudaMemset(void *dst, int value, size_t count)
+{
+	VirtIOArg arg;
+	func();
+	memset(&arg, 0, sizeof(VirtIOArg));
+	arg.cmd = VIRTIO_CUDA_MEMSET;
+	arg.param = (uint64_t)value;
+	arg.dst = (uint64_t)dst;
+	arg.dstSize = count;
+	arg.tid = syscall(SYS_gettid);
+	send_to_device(VIRTIO_IOC_MEMSET, &arg);
+	return (cudaError_t)arg.cmd;	
+}
+
 cudaError_t cudaMemcpyAsync(
 			void *dst, 
 			const void *src, 
@@ -398,6 +412,17 @@ cudaError_t cudaDeviceReset(void)
 	return (cudaError_t)arg.cmd;	
 }
 
+cudaError_t cudaDeviceSynchronize(void)
+{
+	VirtIOArg arg;
+	func();
+	memset(&arg, 0, sizeof(VirtIOArg));
+	arg.cmd = VIRTIO_CUDA_DEVICESYNCHRONIZE;
+	arg.tid = syscall(SYS_gettid);
+	send_to_device(VIRTIO_IOC_DEVICESYNCHRONIZE, &arg);
+	return (cudaError_t)arg.cmd;	
+}
+
 cudaError_t cudaStreamCreate(cudaStream_t *pStream)
 {
 	VirtIOArg arg;
@@ -431,6 +456,19 @@ cudaError_t cudaEventCreate(cudaEvent_t *event)
 	arg.tid = syscall(SYS_gettid);
 	send_to_device(VIRTIO_IOC_EVENTCREATE, &arg);
 	 *event = (void*)(arg.flag);
+	return (cudaError_t)arg.cmd;	
+}
+
+cudaError_t cudaEventCreateWithFlags(cudaEvent_t *event, unsigned int flags)
+{
+	VirtIOArg arg;
+	func();
+	memset(&arg, 0, sizeof(VirtIOArg));
+	arg.cmd = VIRTIO_CUDA_EVENTCREATEWITHFLAGS;
+	arg.flag = flags;
+	arg.tid = syscall(SYS_gettid);
+	send_to_device(VIRTIO_IOC_EVENTCREATEWITHFLAGS, &arg);
+	 *event = (void*)(arg.dst);
 	return (cudaError_t)arg.cmd;	
 }
 
