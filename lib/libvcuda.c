@@ -116,7 +116,6 @@ void** __cudaRegisterFatBinary(void *fatCubin)
 		arg.cmd = (VIRTIO_CUDA_REGISTERFATBINARY);
 		arg.tid = syscall(SYS_gettid);
 		send_to_device(VIRTIO_IOC_REGISTERFATBINARY, &arg);
-		debug("	arg.cmd = %d\n", arg.cmd);
 		if(arg.cmd != cudaSuccess)
 		{
 			error("	fatbin not registered\n");
@@ -139,7 +138,6 @@ void __cudaUnregisterFatBinary(void **fatCubinHandle)
 	arg.cmd = VIRTIO_CUDA_UNREGISTERFATBINARY;
 	arg.tid = syscall(SYS_gettid);
 	send_to_device(VIRTIO_IOC_UNREGISTERFATBINARY, &arg);
-	debug("	arg.cmd = %d\n", arg.cmd);
 	close_vdevice();
 	if (fatCubinHandle != NULL)
 		free(fatCubinHandle);
@@ -184,7 +182,6 @@ void __cudaRegisterFunction(
 	debug("	arg.srcSize = %d\n", arg.srcSize);
 	debug("	len of deviceName = %d\n", arg.dstSize );
 	send_to_device(VIRTIO_IOC_REGISTERFUNCTION, &arg);
-	debug("	arg.cmd = %d\n", arg.cmd);
 	if(arg.cmd != cudaSuccess)
 	{
 		error("	functions are not registered successfully.\n");
@@ -232,7 +229,7 @@ cudaError_t cudaConfigureCall(
 	kernelConf.blockDim = blockDim;
 	kernelConf.sharedMem = sharedMem;
 	kernelConf.stream = stream;
-// very important
+	// Not invoke ioctl
 	return cudaSuccess;
 }
 
@@ -270,7 +267,6 @@ cudaError_t cudaLaunch(const void *entry)
 	arg.flag = (uint64_t)entry;
 	arg.tid = syscall(SYS_gettid);
 	send_to_device(VIRTIO_IOC_LAUNCH, &arg);
-	debug("	arg.cmd = %d\n", arg.cmd);
 	return (cudaError_t)arg.cmd;	
 }
 
@@ -287,7 +283,6 @@ cudaError_t cudaMemcpy(void *dst, const void *src, size_t count, enum cudaMemcpy
 	arg.dstSize = count;
 	arg.tid = syscall(SYS_gettid);
 	send_to_device(VIRTIO_IOC_MEMCPY, &arg);
-	debug("	arg.cmd = %d\n", arg.cmd);
 	return (cudaError_t)arg.cmd;	
 }
 
@@ -311,7 +306,6 @@ cudaError_t cudaMemcpyAsync(
 	arg.param = (uint64_t)stream;
 	arg.tid = syscall(SYS_gettid);
 	send_to_device(VIRTIO_IOC_MEMCPY_ASYNC, &arg);
-	debug("	arg.cmd = %d\n", arg.cmd);
 	return (cudaError_t)arg.cmd;	
 }
 
@@ -326,7 +320,6 @@ cudaError_t cudaMalloc(void **devPtr, size_t size)
 	arg.tid = syscall(SYS_gettid);
 	send_to_device(VIRTIO_IOC_MALLOC, &arg);
 	*devPtr = (void *)arg.dst;
-	debug("arg.cmd = %d\n", arg.cmd);
 	return (cudaError_t)arg.cmd;	
 }
 
@@ -340,7 +333,6 @@ cudaError_t cudaFree (void *devPtr)
 	arg.srcSize = 0;
 	arg.tid = syscall(SYS_gettid);
 	send_to_device(VIRTIO_IOC_FREE, &arg);
-	debug("arg.cmd = %d\n", arg.cmd);
 	return (cudaError_t)arg.cmd;	
 }
 
@@ -354,7 +346,6 @@ cudaError_t cudaGetDevice (int *device)
 	arg.dstSize = sizeof(int);
 	arg.tid = syscall(SYS_gettid);
 	send_to_device(VIRTIO_IOC_GETDEVICE, &arg);
-	debug("	arg.cmd = %d\n", arg.cmd);
 	return (cudaError_t)arg.cmd;
 }
 
@@ -369,7 +360,6 @@ cudaError_t cudaGetDeviceProperties(struct cudaDeviceProp *prop, int device)
 	arg.flag = device;
 	arg.tid = syscall(SYS_gettid);
 	send_to_device(VIRTIO_IOC_GETDEVICEPROPERTIES, &arg);
-	debug("	arg.cmd = %d\n", arg.cmd);
 	return (cudaError_t)arg.cmd;	
 }
 
@@ -382,7 +372,6 @@ cudaError_t cudaSetDevice(int device)
 	arg.flag = device;
 	arg.tid = syscall(SYS_gettid);
 	send_to_device(VIRTIO_IOC_SETDEVICE, &arg);
-	debug("	arg.cmd = %d\n", arg.cmd);
 	return (cudaError_t)arg.cmd;	
 }
 
@@ -395,7 +384,6 @@ cudaError_t cudaGetDeviceCount(int *count)
 	arg.tid = syscall(SYS_gettid);
 	send_to_device(VIRTIO_IOC_GETDEVICECOUNT, &arg);
 	*count = arg.flag;
-	debug("	arg.cmd = %d\n", arg.cmd);
 	return (cudaError_t)arg.cmd;	
 }
 
@@ -407,7 +395,6 @@ cudaError_t cudaDeviceReset(void)
 	arg.cmd = VIRTIO_CUDA_DEVICERESET;
 	arg.tid = syscall(SYS_gettid);
 	send_to_device(VIRTIO_IOC_DEVICERESET, &arg);
-	debug("	arg.cmd = %d\n", arg.cmd);
 	return (cudaError_t)arg.cmd;	
 }
 
@@ -420,7 +407,6 @@ cudaError_t cudaStreamCreate(cudaStream_t *pStream)
 	arg.tid = syscall(SYS_gettid);
 	send_to_device(VIRTIO_IOC_STREAMCREATE, &arg);
 	*pStream = (cudaStream_t)arg.flag;
-	debug("	arg.cmd = %d\n", arg.cmd);
 	return (cudaError_t)arg.cmd;	
 }
 
@@ -433,7 +419,6 @@ cudaError_t cudaStreamDestroy(cudaStream_t stream)
 	arg.flag = (uint64_t)stream;
 	arg.tid = syscall(SYS_gettid);
 	send_to_device(VIRTIO_IOC_STREAMDESTROY, &arg);
-	debug("	arg.cmd = %d\n", arg.cmd);
 	return (cudaError_t)arg.cmd;	
 }
 
@@ -446,7 +431,6 @@ cudaError_t cudaEventCreate(cudaEvent_t *event)
 	arg.tid = syscall(SYS_gettid);
 	send_to_device(VIRTIO_IOC_EVENTCREATE, &arg);
 	 *event = (void*)(arg.flag);
-	debug("	arg.cmd = %d\n", arg.cmd);
 	return (cudaError_t)arg.cmd;	
 }
 
@@ -459,7 +443,6 @@ cudaError_t cudaEventDestroy(cudaEvent_t event)
 	arg.flag = (uint64_t)event;
 	arg.tid = syscall(SYS_gettid);
 	send_to_device(VIRTIO_IOC_EVENTDESTROY, &arg);
-	debug("	arg.cmd = %d\n", arg.cmd);
 	return (cudaError_t)arg.cmd;	
 }
 
@@ -477,8 +460,6 @@ cudaError_t cudaEventRecord(cudaEvent_t event, cudaStream_t stream)
 		arg.dst = (uint64_t)stream;
 	arg.tid = syscall(SYS_gettid);
 	send_to_device(VIRTIO_IOC_EVENTRECORD, &arg);
-	// do something
-	debug("	arg.cmd = %d\n", arg.cmd);
 	return (cudaError_t)arg.cmd;	
 }
 
@@ -491,7 +472,6 @@ cudaError_t cudaEventSynchronize(cudaEvent_t event)
 	arg.flag = (uint64_t)event;
 	arg.tid = syscall(SYS_gettid);
 	send_to_device(VIRTIO_IOC_EVENTSYNCHRONIZE, &arg);
-	debug("	arg.cmd = %d\n", arg.cmd);
 	return (cudaError_t)arg.cmd;	
 }
 
@@ -505,14 +485,21 @@ cudaError_t cudaEventElapsedTime(float *ms, cudaEvent_t start, cudaEvent_t end)
 	arg.src = (uint64_t)start;
 	arg.dst = (uint64_t)end;
 	send_to_device(VIRTIO_IOC_EVENTELAPSEDTIME, &arg);
-	debug("	arg.cmd = %d\n", arg.cmd);
 	*ms = (float)arg.flag;
 	return (cudaError_t)arg.cmd;	
 }
+
 cudaError_t cudaThreadSynchronize()
 {
+	VirtIOArg arg;
 	func();
+	memset(&arg, 0, sizeof(VirtIOArg));
+	arg.cmd = VIRTIO_CUDA_THREADSYNCHRONIZE;
+	arg.tid = syscall(SYS_gettid);
+	send_to_device(VIRTIO_IOC_THREADSYNCHRONIZE, &arg);
+	return (cudaError_t)arg.cmd;
 }
+
 cudaError_t cudaGetLastError(void)
 {
 	VirtIOArg arg;
@@ -521,6 +508,5 @@ cudaError_t cudaGetLastError(void)
 	arg.cmd = VIRTIO_CUDA_GETLASTERROR;
 	arg.tid = syscall(SYS_gettid);
 	send_to_device(VIRTIO_IOC_GETLASTERROR, &arg);
-	debug("	arg.cmd = %d\n", arg.cmd);
-	return (cudaError_t)arg.cmd;	
+	return (cudaError_t)arg.cmd;
 }

@@ -4,7 +4,7 @@
 __global__ void kernel(int *a)
 {
 	int tx = threadIdx.x;
-	a[tx] = a[tx] + 3;
+	a[tx] = a[tx] + 8;
 }
 
 

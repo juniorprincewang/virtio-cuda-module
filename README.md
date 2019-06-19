@@ -51,18 +51,34 @@ automake libtool libsdl1.2-dev libsasl2-dev libcurl4-openssl-dev libsasl2-dev li
 
 ## A CUDA sample in guest OS 
 
-In the guest OS, *nvcc* compiles the source with host/device code and standard CUDA runtime APIs. To compare with a native OS, in the guest VM, compiling the CUDA program must add the nvcc flag "**-cudart=shared**", which can be dynamically linked to the userspace library as a shared library.   
-Therefore, the wrappered library provided functions that intercepted dynamic memory allocation of CPU code and CUDA runtime APIs.  
-After installing qCUdriver and qCUlibrary in the guest OS, modify the internal flags in the Makefile as below:  
+In the guest OS, *nvcc* compiles the source with host/device code and 
+standard CUDA runtime APIs. To compare with a native OS, in the 
+guest VM, compiling the CUDA program must add the nvcc flag 
+"**-cudart=shared**", which can be dynamically linked to the userspace 
+library as a shared library.   
+Therefore, the wrappered library provided functions that intercepted 
+dynamic memory allocation of CPU code and CUDA runtime APIs.  
+After installing qCUdriver and qCUlibrary in the guest OS, modify the 
+internal flags in the Makefile as below:  
 ```shell
 # internal flags
 NVCCFLAGS   := -m${TARGET_SIZE} -cudart=shared      
 ```
-Finally, run make and perform the executable file without change any source code.
+
+Finally, run make and perform the executable file without change any 
+source code by `LD_PRELOAD` or change the `LD_LIBRARY_PATH`.   
+
+```sh
+LD_PRELOAD=\path\to\libvcuda.so ./vectorAdd
+```
 
 
-# add the new CUDA runtime API
+# supported CUDA runtime API 
 
-To do
+In our current version, we implement necessary CUDA runtime APIs. These CUDA 
+runtime API are shown as below:  
 
-Thanks [qcuda](https://github.com/coldfunction/qCUDA) for inspiring.
+
+
+
+Last but not least, thanks [qcuda](https://github.com/coldfunction/qCUDA) for inspiring.
