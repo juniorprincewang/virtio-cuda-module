@@ -5,7 +5,7 @@ ROUTINES= /home/max/vgpu/vm
 TARGET	= run
 NVCC	= nvcc -arch sm_35 
 LIBS	= -lcudart
-CFLAGS	= -L /home/maxwell/virtio-cuda-module/lib/
+CFLAGS	= -L /usr/local/vcuda/lib64/
 
 all:
 #	nvcc step2.cu --cudart=shared -o run
