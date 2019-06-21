@@ -1,13 +1,15 @@
-
-HOST=10.10.81.192
-USER=max
-ROUTINES=/home/max/vgpu/vm
-HOMES=/home/maxwell/virtio-cuda-module/
-
+HOST 	= 10.10.81.192
+USER	= max
+ROUTINES= /home/max/vgpu/vm
+TARGET	= run
+NVCC	= nvcc -arch sm_35 
+LIBS	= -lcudart
+CFLAGS	= -L /home/maxwell/virtio-cuda-module/lib/
 
 all:
-	nvcc step2.cu --cudart=shared -o run
-	LD_PRELOAD=../../lib/libvcuda.so ./run
+#	nvcc launchkernel.cu --cudart=shared -o run
+#	LD_PRELOAD=../../lib/libcudart.so ./run
+	$(NVCC) $(CFLAGS) $(LIBS) -o $(TARGET) launchkernel.cu 
 
 clean:
 	rm -f ./run

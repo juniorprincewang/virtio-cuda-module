@@ -3,13 +3,10 @@ COMMONFLAGS=-Wall -fpic -shared -ldl -Wno-multichar
 HOMES=/home/maxwell/virtio-cuda-module/
 
 all:
-	nvcc --shared --compiler-options "$(COMMONFLAGS)" libvcuda.c -I$(CUDAPATH)/include -o libvcuda.so
+	nvcc --shared --compiler-options "$(COMMONFLAGS)" libcudart.c -I$(CUDAPATH)/include -o libcudart.so
 
 libcc:
-	gcc -I$(CUDAPATH)/include $(COMMONFLAGS) libvcuda.c -o libvcuda.so
-
-exp:
-	export LD_LIBRARY_PATH="$(HOME)/lib/:$LD_LIBRARY_PATH"
+	gcc -I$(CUDAPATH)/include $(COMMONFLAGS) libcudart.c -o libcudart.so
 
 clean:
 	rm -f *.so
