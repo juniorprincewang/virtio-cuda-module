@@ -548,3 +548,29 @@ cudaError_t cudaGetLastError(void)
 	send_to_device(VIRTIO_IOC_GETLASTERROR, &arg);
 	return (cudaError_t)arg.cmd;
 }
+
+cudaError_t cudaMemGetInfo(size_t *free, size_t *total)
+{
+	VirtIOArg arg;
+	func();
+	memset(&arg, 0, sizeof(VirtIOArg));
+	arg.cmd = VIRTIO_CUDA_MEMGETINFO;
+	arg.tid = syscall(SYS_gettid);
+	send_to_device(VIRTIO_IOC_MEMGETINFO, &arg);
+	*free = (size_t)arg.srcSize;
+	*total = (size_t)arg.dstSize;
+	return (cudaError_t)arg.cmd;
+}
+
+
+// cudaError_t cudaSetDeviceFlags(unsigned int flags)
+// {
+// 	VirtIOArg arg;
+// 	func();
+// 	memset(&arg, 0, sizeof(VirtIOArg));
+// 	arg.cmd = VIRTIO_CUDA_SETDEVICEFLAGS;
+// 	arg.tid = syscall(SYS_gettid);
+// 	arg.flag = flags;
+// 	send_to_device(VIRTIO_IOC_SETDEVICEFLAGS, &arg);
+// 	return (cudaError_t)arg.cmd;
+// }

@@ -1760,6 +1760,26 @@ int cuda_set_device(VirtIOArg __user *arg, struct port *port)
 	return ret;
 }
 
+int cuda_set_device_flags(VirtIOArg __user *arg, struct port *port)
+{
+	VirtIOArg *payload;
+	int ret;
+	func();
+
+	payload = (VirtIOArg *)memdup_user(arg, arg_len);
+	if(!payload) {
+		pr_err("[ERROR] can not malloc 0x%lx memory\n", arg_len);
+		return -ENOMEM;
+	}
+
+	ret = send_to_virtio(port, (void*)payload, arg_len);
+	gldebug("[+] now analyse return buf\n");
+	gldebug("[+] arg->cmd = %d\n", payload->cmd);
+	put_user(payload->cmd, &arg->cmd);
+	kfree(payload);
+	return ret;
+}
+
 void cuda_configure_call(VirtIOArg __user *arg, struct port *port)
 {
 
@@ -1992,6 +2012,28 @@ int cuda_event_record(VirtIOArg __user *arg, struct port *port)
 	return ret;
 }
 
+int cuda_mem_get_info(VirtIOArg __user *arg, struct port *port)
+{
+	VirtIOArg *payload;
+	int ret;
+	func();
+
+	payload = (VirtIOArg *)memdup_user(arg, arg_len);
+	if(!payload) {
+		pr_err("[ERROR] can not malloc 0x%lx memory\n", arg_len);
+		return -ENOMEM;
+	}
+
+	ret = send_to_virtio(port, (void*)payload, arg_len);
+	gldebug("[+] now analyse return buf\n");
+	gldebug("[+] arg->cmd = %d\n", payload->cmd);
+	put_user(payload->cmd, &arg->cmd);
+	put_user(payload->srcSize, &arg->srcSize);
+	put_user(payload->dstSize, &arg->dstSize);
+	kfree(payload);
+	return ret;
+}
+
 int cuda_gpa_to_hva(VirtIOArg __user *arg, struct port *port)
 {
 	void *gva, *gpa;
@@ -2136,6 +2178,12 @@ static long port_fops_ioctl(struct file *filp, unsigned int cmd, unsigned long a
 			break;
 		case VIRTIO_IOC_EVENTCREATEWITHFLAGS:
 			cuda_event_create_with_flags((VirtIOArg __user*)arg, port);
+			break;
+		case VIRTIO_IOC_MEMGETINFO:
+			cuda_mem_get_info((VirtIOArg __user*)arg, port);
+			break;
+		case VIRTIO_IOC_SETDEVICEFLAGS:
+			cuda_set_device_flags((VirtIOArg __user*)arg, port);
 			break;
 		default:
 			pr_err("[#] illegel VIRTIO ioctl nr = %u!\n", \

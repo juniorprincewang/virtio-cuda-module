@@ -84,11 +84,11 @@ runtime API are shown as below:
     <th class="tg-yw4l">supported CUDA runtime API</th>
   </tr>
   <tr>
-    <td class="tg-yw4l" rowspan="5">Memory Management</td>
+    <td class="tg-yw4l" rowspan="6">Memory Management</td>
     <td class="tg-3we0">cudaMalloc</td>
   </tr>
   <tr>
-    <td class="tg-3we0">--cudaMemset</td>
+    <td class="tg-3we0">cudaMemset</td>
   </tr>
   <tr>
     <td class="tg-3we0">cudaMemcpy</td>
@@ -98,6 +98,9 @@ runtime API are shown as below:
   </tr>
   <tr>
     <td class="tg-3we0">cudaFree</td>
+  </tr>
+  <tr>
+    <td class="tg-3we0">cudaMemGetInfo</td>
   </tr>
   <tr>
     <td class="tg-yw4l" rowspan="6">Device Management</td>
@@ -113,7 +116,7 @@ runtime API are shown as below:
     <td class="tg-3we0">cudaGetDeviceProperties</td>
   </tr>
   <tr>
-    <td class="tg-3we0">--cudaDeviceSynchronize</td>
+    <td class="tg-3we0">cudaDeviceSynchronize</td>
   </tr>
   <tr>
     <td class="tg-3we0">cudaDeviceReset</td>
