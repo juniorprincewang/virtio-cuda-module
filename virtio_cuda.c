@@ -38,6 +38,7 @@
 #include <linux/module.h>
 #include <linux/dma-mapping.h>
 
+#include <linux/proc_fs.h> // proc operations PDE_DATA
 #include "virtio-ioc.h"
 #include "virtio_cuda.h"
 
@@ -58,6 +59,7 @@
 
 #define is_rproc_enabled IS_ENABLED(CONFIG_REMOTEPROC)
 
+
 /*
  * This is a global struct for storing common data for all the devices
  * this driver handles.
@@ -72,6 +74,9 @@ struct ports_driver_data {
 
 	/* Used for exporting per-port information to debugfs */
 	struct dentry *debugfs_dir;
+
+	/* Used for exporting portdev information, including virt_dev_count */
+	struct proc_dir_entry *proc_dir;
 
 	/* List of all the devices we're handling */
 	struct list_head portdevs;
@@ -170,6 +175,9 @@ struct ports_device {
 	/* max. number of ports this device can hold */
 	u32 max_nr_ports;
 
+	/* number of ports this device holds */
+	u32 nr_ports;
+
 	/* The virtio device we're associated with */
 	struct virtio_device *vdev;
 
@@ -190,6 +198,9 @@ struct ports_device {
 
 	/* Major number for this device.  Ports will be created as minors. */
 	int chr_major;
+
+	/* File in the proc directory that exposes this portdev's information */
+	struct proc_dir_entry *proc_virt_dev_count;
 };
 
 struct port_stats {
@@ -1065,6 +1076,8 @@ static int port_fops_open(struct inode *inode, struct file *filp)
 	struct port *port;
 	int ret;
 
+	func();
+
 	/* We get the port with a kref here */
 	port = find_port_by_devt(cdev->dev);
 	if (!port) {
@@ -1073,6 +1086,7 @@ static int port_fops_open(struct inode *inode, struct file *filp)
 	}
 	filp->private_data = port;
 
+	gldebug("filp->private_data port->id=%d\n", port->id);
 	/*
 	 * Don't allow opening of console port devices -- that's done
 	 * via /dev/hvc
@@ -1082,7 +1096,7 @@ static int port_fops_open(struct inode *inode, struct file *filp)
 		goto out;
 	}
 
-	/* Allow only one process to open a particular port at a time */
+	/* Allow only ||one process|| to open a particular port at a time */
 	spin_lock_irq(&port->inbuf_lock);
 	if (port->guest_connected) {
 		spin_unlock_irq(&port->inbuf_lock);
@@ -2422,6 +2436,46 @@ static void send_sigio_to_port(struct port *port)
 		kill_fasync(&port->async_queue, SIGIO, POLL_OUT);
 }
 
+
+
+
+static int cuda_proc_val_show(struct seq_file *file, void *v)
+{
+	uint32_t *val = file->private;
+	seq_printf(file, "%u", *val);
+	return 0;
+}
+
+static int test_proc_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, cuda_proc_val_show, PDE_DATA(inode));
+}
+
+static const struct file_operations proc_virt_dev_count_fops = {
+	.owner = THIS_MODULE,
+	.open  = test_proc_open,
+	.read  = seq_read,
+	.llseek  = seq_lseek,
+	.release = single_release,
+};
+
+static int proc_file_create(struct ports_device *portdev)
+{
+	char name[256];
+	if (pdrvdata.proc_dir) {
+		/*virt_device_count*/
+		sprintf(name, "virtual_device_count");
+		portdev->proc_virt_dev_count = proc_create_data(name, S_IRUGO, 
+					pdrvdata.proc_dir, &proc_virt_dev_count_fops,
+					&portdev->nr_ports);
+		if(!portdev->proc_virt_dev_count){
+			pr_err("Failed to create /proc/virtio-cuda/%s\n", name);
+			return -EINVAL;
+		}
+	}
+	return 0;
+}
+
 static int add_port(struct ports_device *portdev, u32 id)
 {
 	char debugfs_name[16];
@@ -2512,6 +2566,7 @@ static int add_port(struct ports_device *portdev, u32 id)
 
 	spin_lock_irq(&portdev->ports_lock);
 	list_add_tail(&port->list, &port->portdev->ports);
+	portdev->nr_ports++;
 	spin_unlock_irq(&portdev->ports_lock);
 
 	/*
@@ -2601,6 +2656,7 @@ static void unplug_port(struct port *port)
 {
 	spin_lock_irq(&port->portdev->ports_lock);
 	list_del(&port->list);
+	port->portdev->nr_ports--;
 	spin_unlock_irq(&port->portdev->ports_lock);
 
 	spin_lock_irq(&port->inbuf_lock);
@@ -3037,6 +3093,7 @@ static int virtcons_probe(struct virtio_device *vdev)
 
 	portdev->chr_major = register_chrdev(0, "virtio-portsdev",
 					     &portdev_fops);
+	gldebug("chr_major = %d\n", portdev->chr_major);
 	if (portdev->chr_major < 0) {
 		dev_err(&vdev->dev,
 			"Error %d registering chrdev for device %u\n",
@@ -3047,7 +3104,7 @@ static int virtcons_probe(struct virtio_device *vdev)
 
 	multiport = false;
 	portdev->max_nr_ports = 1;
-
+	portdev->nr_ports = 0;
 	/* Don't test MULTIPORT at all if we're rproc: not a valid feature! */
 	if (!is_rproc_serial(vdev) &&
 	    virtio_cread_feature(vdev, VIRTIO_CONSOLE_F_MULTIPORT,
@@ -3070,6 +3127,7 @@ static int virtcons_probe(struct virtio_device *vdev)
 	INIT_WORK(&portdev->config_work, &config_work_handler);
 	INIT_WORK(&portdev->control_work, &control_work_handler);
 
+	gldebug("multiport = %d\n", multiport);
 	if (multiport) {
 		unsigned int nr_added_bufs;
 
@@ -3095,6 +3153,9 @@ static int virtcons_probe(struct virtio_device *vdev)
 	spin_lock_irq(&pdrvdata_lock);
 	list_add_tail(&portdev->list, &pdrvdata.portdevs);
 	spin_unlock_irq(&pdrvdata_lock);
+	gldebug("nr_ports = %d\n", portdev->nr_ports);
+	gldebug("max_nr_ports = %d\n", portdev->max_nr_ports);
+	proc_file_create(portdev);
 
 	__send_control_msg(portdev, VIRTIO_CONSOLE_BAD_ID,
 			   VIRTIO_CONSOLE_DEVICE_READY, 1);
@@ -3287,6 +3348,9 @@ static int __init init(void)
 	pdrvdata.debugfs_dir = debugfs_create_dir("virtio-cuda", NULL);
 	if (!pdrvdata.debugfs_dir)
 		pr_warn("Error creating debugfs dir for virtio-cuda\n");
+	pdrvdata.proc_dir = proc_mkdir("virtio-cuda", NULL);
+	if (!pdrvdata.proc_dir)
+		pr_warn("Error creating proc dir for /proc/virtio-cuda\n");
 	INIT_LIST_HEAD(&pdrvdata.consoles);
 	INIT_LIST_HEAD(&pdrvdata.portdevs);
 
@@ -3300,19 +3364,21 @@ static int __init init(void)
 
 free:
 	debugfs_remove_recursive(pdrvdata.debugfs_dir);
+	proc_remove(pdrvdata.proc_dir);
 	class_destroy(pdrvdata.class);
 	return err;
 }
 
 static void __exit fini(void)
 {
-	pr_info("Bye bye virtio cuda!\n");
 	reclaim_dma_bufs();
 
 	unregister_virtio_driver(&virtio_cuda_driver);
 
 	class_destroy(pdrvdata.class);
 	debugfs_remove_recursive(pdrvdata.debugfs_dir);
+	proc_remove(pdrvdata.proc_dir);
+	pr_info("Bye bye virtio cuda!\n");
 }
 module_init(init);
 module_exit(fini);

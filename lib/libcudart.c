@@ -16,6 +16,7 @@
 #include <errno.h>
 
 #define DEVICE_PATH "/dev/cudaport2p1"
+#define DEVICE_FILE "/dev/cudaport2p%d"
 
 // #define VIRTIO_CUDA_DEBUG
 
@@ -47,7 +48,7 @@ static uint8_t cudaKernelPara[512];	// uint8_t === unsigned char
 static uint32_t cudaParaSize;		// uint32_t == unsigned int
 static KernelConf_t kernelConf;
 static int fd=-1;
-
+static int device_count=0;
 /*
  * ioctl
 */
@@ -64,12 +65,15 @@ void send_to_device(int cmd, VirtIOArg *arg)
 void open_vdevice()
 {
 	func();
-	if (fd == -1)
-	{
+	if (fd == -1) {
 		fd = open(DEVICE_PATH, MODE);
-		if(fd == -1)
-		{
-			error("open device %s failed, %s (%d)\n", DEVICE_PATH, (char*)strerror(errno), errno);
+		if (fd == -EBUSY) {
+			error("device %s is busy, %s (%d)\n", DEVICE_PATH, 
+				(char*)strerror(errno), errno);
+			exit(EXIT_FAILURE);
+		} else if(fd < 0) {
+			error("open device %s failed, %s (%d)\n", DEVICE_PATH, 
+				(char*)strerror(errno), errno);
 			exit(EXIT_FAILURE);
 		}
 		debug("fd is %d\n", fd);
@@ -82,6 +86,54 @@ void close_vdevice()
 	close(fd);
 	debug("closing fd\n");
 }
+
+int get_vdevice_count(int *result)
+{
+	char fname[128]="/proc/virtio-cuda/virtual_device_count";
+	char buf[15];
+	int size;
+	int fd=0;
+	int minor=0;
+	fd=open(fname, O_RDONLY);
+	if (fd<0) {
+		error("open device %s failed, %s (%d)\n", 
+			fname, (char*)strerror(errno), errno);
+		return -ENODEV;
+	}
+	if((size=read(fd, buf, 16))<0) {
+		error("read error!\n");
+		return -ENODEV;
+	}
+	close(fd);
+	sscanf(buf, "%d", &minor);
+	*result = minor;
+	return 0;
+}
+
+int cuda_open(int minor)
+{
+	char devname[32];
+	int fd=0;
+	sprintf(devname, DEVICE_FILE, minor);
+	fd = open(devname, MODE);
+	if (fd == -EBUSY) {
+		error("device %s is busy, %s (%d)\n", DEVICE_PATH, 
+				(char*)strerror(errno), errno);
+		return -EBUSY;
+	} else if(fd < 0){
+		error("open device "DEVICE_FILE" failed, %s (%d)", 
+			minor, (char *)strerror(errno), errno);
+		exit(EXIT_FAILURE);
+	}
+	debug("fd is %d\n", fd);
+	return fd;	
+}
+
+int cuda_close()
+{
+
+}
+
 
 void** __cudaRegisterFatBinary(void *fatCubin)
 {
