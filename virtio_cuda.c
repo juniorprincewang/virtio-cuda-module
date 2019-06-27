@@ -2099,6 +2099,8 @@ static long port_fops_ioctl(struct file *filp, unsigned int cmd, unsigned long a
 
 	port = filp->private_data;
 	
+	gldebug("port->id=%d\n", port->id);
+	
 	if (!argp)
 		return -EINVAL;
 

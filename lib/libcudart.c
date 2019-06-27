@@ -35,6 +35,7 @@
 #define MODE O_RDWR
 
 #define ARG_LEN sizeof(VirtIOArg)
+#define DEVICE_COUNT 32
 
 typedef struct KernelConf
 {
@@ -49,6 +50,7 @@ static uint32_t cudaParaSize;		// uint32_t == unsigned int
 static KernelConf_t kernelConf;
 static int fd=-1;
 static int device_count=0;
+
 /*
  * ioctl
 */
@@ -57,34 +59,6 @@ void send_to_device(int cmd, VirtIOArg *arg)
 	if(ioctl(fd, cmd, arg) == -1){
 		error("ioctl when cmd is %d\n", _IOC_NR(cmd));
 	}
-}
-
-/*
- * open token
-*/
-void open_vdevice()
-{
-	func();
-	if (fd == -1) {
-		fd = open(DEVICE_PATH, MODE);
-		if (fd == -EBUSY) {
-			error("device %s is busy, %s (%d)\n", DEVICE_PATH, 
-				(char*)strerror(errno), errno);
-			exit(EXIT_FAILURE);
-		} else if(fd < 0) {
-			error("open device %s failed, %s (%d)\n", DEVICE_PATH, 
-				(char*)strerror(errno), errno);
-			exit(EXIT_FAILURE);
-		}
-		debug("fd is %d\n", fd);
-	}
-}
-
-void close_vdevice()
-{
-	func();
-	close(fd);
-	debug("closing fd\n");
 }
 
 int get_vdevice_count(int *result)
@@ -110,30 +84,45 @@ int get_vdevice_count(int *result)
 	return 0;
 }
 
-int cuda_open(int minor)
+/*
+ * open token
+*/
+int open_vdevice()
 {
 	char devname[32];
-	int fd=0;
-	sprintf(devname, DEVICE_FILE, minor);
-	fd = open(devname, MODE);
-	if (fd == -EBUSY) {
-		error("device %s is busy, %s (%d)\n", DEVICE_PATH, 
-				(char*)strerror(errno), errno);
-		return -EBUSY;
-	} else if(fd < 0){
-		error("open device "DEVICE_FILE" failed, %s (%d)", 
-			minor, (char *)strerror(errno), errno);
-		exit(EXIT_FAILURE);
+	int minor=0;
+	if(get_vdevice_count(&device_count) < 0) {
+		error("Cannot find valid device.\n");
+		return -ENODEV;
+	}
+	debug("device_count=%d\n", device_count);
+	for(minor=1; minor<=device_count; minor++) {
+		sprintf(devname, DEVICE_FILE, minor);
+		fd = open(devname, MODE);
+		if(fd>= 0)
+			break;
+		else if(errno==EBUSY) {
+			debug("minor %d is busy\n", minor);
+			continue;
+		}
+		else
+			error("open device "DEVICE_FILE" failed, %s (%d)", 
+				minor, (char *)strerror(errno), errno);
+	}
+	if(minor > device_count) {
+		error("Failed to find valid device file.\n");
+		return -EINVAL;
 	}
 	debug("fd is %d\n", fd);
-	return fd;	
+	return 0;
 }
 
-int cuda_close()
+void close_vdevice()
 {
-
+	func();
+	close(fd);
+	debug("closing fd\n");
 }
-
 
 void** __cudaRegisterFatBinary(void *fatCubin)
 {
@@ -142,7 +131,10 @@ void** __cudaRegisterFatBinary(void *fatCubin)
 	unsigned long long **fatCubinHandle;
 
 	func();
-	open_vdevice();
+	
+	if(open_vdevice() < 0)
+		exit(-1);
+
 	fatCubinHandle = (unsigned long long**)malloc(sizeof(unsigned long long*));
 	magic = *(unsigned int*)fatCubin;
 	if (magic == FATBINC_MAGIC)
