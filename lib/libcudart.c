@@ -15,7 +15,6 @@
 #include "../virtio-ioc.h"
 #include <errno.h>
 
-#define DEVICE_PATH "/dev/cudaport2p1"
 #define DEVICE_FILE "/dev/cudaport2p%d"
 
 // #define VIRTIO_CUDA_DEBUG
@@ -48,9 +47,9 @@ typedef struct KernelConf
 static uint8_t cudaKernelPara[512];	// uint8_t === unsigned char
 static uint32_t cudaParaSize;		// uint32_t == unsigned int
 static KernelConf_t kernelConf;
-static int fd=-1;
-static int device_count=0;
-
+static int fd=-1;			// fd of device file
+static int device_count=0;	// virtual device number
+static int minor = 0;		// get current device
 /*
  * ioctl
 */
@@ -65,22 +64,22 @@ int get_vdevice_count(int *result)
 {
 	char fname[128]="/proc/virtio-cuda/virtual_device_count";
 	char buf[15];
-	int size;
-	int fd=0;
-	int minor=0;
-	fd=open(fname, O_RDONLY);
-	if (fd<0) {
+	int size=0;
+	int fdv=0;
+	int count=0;
+	fdv=open(fname, O_RDONLY);
+	if (fdv<0) {
 		error("open device %s failed, %s (%d)\n", 
 			fname, (char*)strerror(errno), errno);
 		return -ENODEV;
 	}
-	if((size=read(fd, buf, 16))<0) {
+	if((size=read(fdv, buf, 16))<0) {
 		error("read error!\n");
 		return -ENODEV;
 	}
-	close(fd);
-	sscanf(buf, "%d", &minor);
-	*result = minor;
+	close(fdv);
+	sscanf(buf, "%d", &count);
+	*result = count;
 	return 0;
 }
 
@@ -90,29 +89,30 @@ int get_vdevice_count(int *result)
 int open_vdevice()
 {
 	char devname[32];
-	int minor=0;
+	int i=0;
 	if(get_vdevice_count(&device_count) < 0) {
 		error("Cannot find valid device.\n");
 		return -ENODEV;
 	}
 	debug("device_count=%d\n", device_count);
-	for(minor=1; minor<=device_count; minor++) {
-		sprintf(devname, DEVICE_FILE, minor);
+	for(i=1; i<=device_count; i++) {
+		sprintf(devname, DEVICE_FILE, i);
 		fd = open(devname, MODE);
 		if(fd>= 0)
 			break;
 		else if(errno==EBUSY) {
-			debug("minor %d is busy\n", minor);
+			debug("device %d is busy\n", i);
 			continue;
 		}
 		else
 			error("open device "DEVICE_FILE" failed, %s (%d)", 
-				minor, (char *)strerror(errno), errno);
+				i, (char *)strerror(errno), errno);
 	}
-	if(minor > device_count) {
+	if(i > device_count) {
 		error("Failed to find valid device file.\n");
 		return -EINVAL;
 	}
+	minor = i;
 	debug("fd is %d\n", fd);
 	return 0;
 }
@@ -394,17 +394,19 @@ cudaError_t cudaFree (void *devPtr)
 	return (cudaError_t)arg.cmd;	
 }
 
-cudaError_t cudaGetDevice (int *device)
+cudaError_t cudaGetDevice(int *device)
 {
-	VirtIOArg arg;
-	func();
-	memset(&arg, 0, sizeof(VirtIOArg));
-	arg.cmd = VIRTIO_CUDA_GETDEVICE;
-	arg.dst = (uint64_t)device;
-	arg.dstSize = sizeof(int);
-	arg.tid = syscall(SYS_gettid);
-	send_to_device(VIRTIO_IOC_GETDEVICE, &arg);
-	return (cudaError_t)arg.cmd;
+	// VirtIOArg arg;
+	// func();
+	// memset(&arg, 0, sizeof(VirtIOArg));
+	// arg.cmd = VIRTIO_CUDA_GETDEVICE;
+	// arg.dst = (uint64_t)device;
+	// arg.dstSize = sizeof(int);
+	// arg.tid = syscall(SYS_gettid);
+	// send_to_device(VIRTIO_IOC_GETDEVICE, &arg);
+	// return (cudaError_t)arg.cmd;
+	*device = minor;
+	return cudaSuccess;
 }
 
 cudaError_t cudaGetDeviceProperties(struct cudaDeviceProp *prop, int device)

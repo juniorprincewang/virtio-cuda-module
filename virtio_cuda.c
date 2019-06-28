@@ -1651,32 +1651,32 @@ int cuda_get_device_properties(VirtIOArg __user *arg, struct port *port)
 	uint32_t dst_size;
 	func();
 	
-	if(get_user(dst_size, &arg->dstSize)){
-		pr_err("[ERROR] can not get dst_size\n");	
-		return -EFAULT;
-	}
+	// if(get_user(dst_size, &arg->dstSize)){
+	// 	pr_err("[ERROR] can not get dst_size\n");	
+	// 	return -EFAULT;
+	// }
 
-	payload = (VirtIOArg *)memdup_user(arg, arg_len);
-	if(!payload) {
-		pr_err("[ERROR] can not malloc 0x%x memory\n", arg_len);
-		return -ENOMEM;
-	}
+	// payload = (VirtIOArg *)memdup_user(arg, arg_len);
+	// if(!payload) {
+	// 	pr_err("[ERROR] can not malloc 0x%x memory\n", arg_len);
+	// 	return -ENOMEM;
+	// }
 
-	gva = kmalloc(dst_size, GFP_KERNEL);
-	if(!gva) {
-		pr_err("[ERROR] can not malloc 0x%x memory\n", dst_size);	
-		return -ENOMEM;
-	}
-	payload->dst = (uint64_t)virt_to_phys(gva);
+	// gva = kmalloc(dst_size, GFP_KERNEL);
+	// if(!gva) {
+	// 	pr_err("[ERROR] can not malloc 0x%x memory\n", dst_size);	
+	// 	return -ENOMEM;
+	// }
+	// payload->dst = (uint64_t)virt_to_phys(gva);
 
-	ret = send_to_virtio(port, (void*)payload, arg_len);
-	gldebug("[+] now analyse return buf\n");
-	gldebug("[+] arg->cmd = %d\n", payload->cmd);
-	put_user(payload->cmd, &arg->cmd);
-	copy_to_user_safe((void __user *)arg->dst, gva, dst_size);	
-	kfree(gva);
-	kfree(payload);
-	return ret;
+	// ret = send_to_virtio(port, (void*)payload, arg_len);
+	// gldebug("[+] now analyse return buf\n");
+	// gldebug("[+] arg->cmd = %d\n", payload->cmd);
+	// put_user(payload->cmd, &arg->cmd);
+	// copy_to_user_safe((void __user *)arg->dst, gva, dst_size);	
+	// kfree(gva);
+	// kfree(payload);
+	// return ret;
 }
 
 int cuda_get_device_count(VirtIOArg __user *arg, struct port *port)
@@ -1684,18 +1684,18 @@ int cuda_get_device_count(VirtIOArg __user *arg, struct port *port)
 	VirtIOArg *payload;
 	int ret = 0;
 	func();
-	payload = (VirtIOArg *)memdup_user(arg, arg_len);
-	if(!payload) {
-		pr_err("[ERROR] can not malloc 0x%x memory\n", arg_len);
-		return -ENOMEM;
-	}
-	ret = send_to_virtio(port, (void *)payload, arg_len);
-	gldebug("[+] now analyse return buf\n");
-	gldebug("[+] arg->cmd = %d\n", payload->cmd);
-	put_user(payload->cmd, &arg->cmd);
-	put_user(payload->flag, &arg->flag);
-	kfree(payload);
-	return ret;
+	// payload = (VirtIOArg *)memdup_user(arg, arg_len);
+	// if(!payload) {
+	// 	pr_err("[ERROR] can not malloc 0x%x memory\n", arg_len);
+	// 	return -ENOMEM;
+	// }
+	// ret = send_to_virtio(port, (void *)payload, arg_len);
+	// gldebug("[+] now analyse return buf\n");
+	// gldebug("[+] arg->cmd = %d\n", payload->cmd);
+	// put_user(payload->cmd, &arg->cmd);
+	// put_user(payload->flag, &arg->flag);
+	// kfree(payload);
+	// return ret;
 }
 
 int cuda_get_device(VirtIOArg __user *arg, struct port *port)
@@ -2486,7 +2486,8 @@ static int add_port(struct ports_device *portdev, u32 id)
 	dev_t devt;
 	unsigned int nr_added_bufs;
 	int err;
-
+	func();
+	
 	port = kmalloc(sizeof(*port), GFP_KERNEL);
 	if (!port) {
 		err = -ENOMEM;
@@ -3193,6 +3194,7 @@ static void virtcons_remove(struct virtio_device *vdev)
 {
 	struct ports_device *portdev;
 	struct port *port, *port2;
+	char name[32];
 
 	portdev = vdev->priv;
 
@@ -3212,6 +3214,10 @@ static void virtcons_remove(struct virtio_device *vdev)
 		unplug_port(port);
 
 	unregister_chrdev(portdev->chr_major, "virtio-portsdev");
+
+	sprintf(name, "virtual_device_count");
+	remove_proc_entry(name, pdrvdata.proc_dir);
+	portdev->proc_virt_dev_count = NULL;
 
 	/*
 	 * When yanking out a device, we immediately lose the
