@@ -149,6 +149,23 @@ struct port_buffer {
 };
 
 /*
+ * virtual GPU device information on hosts, they are lists in 
+ * struct ports_device.
+ * Because we cann't use cuda.h or cuda_runtime.h in kernel, we store
+ * any structure of CUDA by buf and size.
+ */
+struct vgpu_device {
+	/* Next vgpu in the list, head is in the ports_device */
+	struct list_head list;
+	/* The 'id' to identify the gpu with the Host */
+	u32 id;
+	/* sizeof struct cudaDeviceProp*/
+	u32 prop_size;
+	/* buf of struct cudaDeviceProp*/
+	char *prop_buf;
+};
+
+/*
  * This is a per-device struct that stores data common to all the
  * ports for that device (vdev->priv).
  */
@@ -164,9 +181,15 @@ struct ports_device {
 	struct work_struct config_work;
 
 	struct list_head ports;
+	struct list_head vgpus;
+
+	/* number of vgpus host holds */
+	u32 nr_vgpus;
 
 	/* To protect the list of ports */
 	spinlock_t ports_lock;
+	/* To protect the list of vgpus */
+	spinlock_t vgpus_lock;
 
 	/* To protect the vq operations for the control channel */
 	spinlock_t c_ivq_lock;
@@ -2487,7 +2510,7 @@ static int add_port(struct ports_device *portdev, u32 id)
 	unsigned int nr_added_bufs;
 	int err;
 	func();
-	
+
 	port = kmalloc(sizeof(*port), GFP_KERNEL);
 	if (!port) {
 		err = -ENOMEM;
@@ -2579,6 +2602,10 @@ static int add_port(struct ports_device *portdev, u32 id)
 	 */
 	send_control_msg(port, VIRTIO_CONSOLE_PORT_READY, 1);
 
+	// if(list_empty(&portdev->vgpus))
+	// 	send_control_msg(port, VIRTIO_CONSOLE_VGPU, 1);
+
+	
 	if (pdrvdata.debugfs_dir) {
 		/*
 		 * Finally, create the debugfs file that we can use to
@@ -2715,8 +2742,52 @@ static void handle_control_message(struct virtio_device *vdev,
 	struct port *port;
 	size_t name_size;
 	int err;
+	struct vgpu_device *vgpu;
+	u32 nr_gpu;
+	size_t prop_size, buf_size;
+	int i;
+	int start;
 
+	func();
 	cpkt = (struct virtio_console_control *)(buf->buf + buf->offset);
+	gldebug("cpkt->event = %d\n", cpkt->event);
+	if(virtio16_to_cpu(vdev, cpkt->event) == VIRTIO_CONSOLE_VGPU) {
+		/*
+		 * Skip the size of the header and the cpkt to get the size
+		 * of the name that was sent
+		 */
+		buf_size = buf->len - buf->offset - sizeof(*cpkt) ;
+		//!!!! be  careful of transferring int type !!!!!!!
+		nr_gpu = *(u32*)(buf->buf + buf->offset + sizeof(*cpkt));
+		prop_size = (buf_size-sizeof(u32))/nr_gpu;
+		start =  buf->offset + sizeof(*cpkt) + sizeof(u32);
+
+		for(i=0; i<buf_size; i+= prop_size) {
+			vgpu = kmalloc(sizeof(*vgpu), GFP_KERNEL);
+			if (!vgpu) {
+				dev_err(&portdev->vdev->dev,
+					"Not enough space to store vgpu.\n");
+				return;
+			}
+			vgpu->id = i;
+			vgpu->prop_size = prop_size;
+			vgpu->prop_buf = kmalloc(prop_size, GFP_KERNEL);
+			if (!vgpu->prop_buf) {
+				dev_err(&portdev->vdev->dev,
+					"Not enough space to store vgpu prop.\n");
+				return;
+			}
+			strncpy(vgpu->prop_buf, buf->buf +start+i, prop_size);
+			spin_lock_irq(&portdev->vgpus_lock);
+			list_add_tail(&vgpu->list, &portdev->vgpus);
+			spin_unlock_irq(&portdev->vgpus_lock);
+
+		}
+		portdev->nr_vgpus = nr_gpu;
+
+		gldebug("portdev->nr_vgpus=%u\n", nr_gpu);
+		return;
+	}
 
 	port = find_port_by_id(portdev, virtio32_to_cpu(vdev, cpkt->id));
 	if (!port &&
@@ -3124,6 +3195,8 @@ static int virtcons_probe(struct virtio_device *vdev)
 
 	spin_lock_init(&portdev->ports_lock);
 	INIT_LIST_HEAD(&portdev->ports);
+	spin_lock_init(&portdev->vgpus_lock);
+	INIT_LIST_HEAD(&portdev->vgpus);
 
 	virtio_device_ready(portdev->vdev);
 
@@ -3162,6 +3235,8 @@ static int virtcons_probe(struct virtio_device *vdev)
 
 	__send_control_msg(portdev, VIRTIO_CONSOLE_BAD_ID,
 			   VIRTIO_CONSOLE_DEVICE_READY, 1);
+	__send_control_msg(portdev, VIRTIO_CONSOLE_BAD_ID,
+			   VIRTIO_CONSOLE_VGPU, 1);
 
 	/*
 	 * If there was an early virtio console, assume that there are no
@@ -3194,8 +3269,10 @@ static void virtcons_remove(struct virtio_device *vdev)
 {
 	struct ports_device *portdev;
 	struct port *port, *port2;
+	struct vgpu_device *vgpu, *vgpu2;
 	char name[32];
 
+	func();
 	portdev = vdev->priv;
 
 	spin_lock_irq(&pdrvdata_lock);
@@ -3212,6 +3289,15 @@ static void virtcons_remove(struct virtio_device *vdev)
 
 	list_for_each_entry_safe(port, port2, &portdev->ports, list)
 		unplug_port(port);
+
+	list_for_each_entry_safe(vgpu, vgpu2, &portdev->vgpus, list) {
+		list_del(&vgpu->list);
+		kfree(vgpu->prop_buf);
+		vgpu->prop_buf = NULL;
+		kfree(vgpu);
+	}
+		
+
 
 	unregister_chrdev(portdev->chr_major, "virtio-portsdev");
 
