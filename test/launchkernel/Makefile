@@ -2,7 +2,7 @@ HOST 	= 10.10.81.192
 USER	= max
 ROUTINES= /home/max/vgpu/vm
 TARGET	= run
-NVCC	= nvcc -arch sm_35 
+NVCC	= nvcc -arch sm_35 --cudart=shared
 LIBS	= -lcudart
 CFLAGS	= -L /usr/local/vcuda/lib64/
 

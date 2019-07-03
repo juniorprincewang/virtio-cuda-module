@@ -1698,7 +1698,7 @@ int cuda_get_device_properties(VirtIOArg __user *arg, struct port *port)
 	gldebug("dst_size is %u.\n", arg->dstSize);
 	if (vgpu) {
 		gldebug("prop_size is %u.\n", vgpu->prop_size);
-		copy_to_user_safe((void __user *)arg->dst, vgpu->prop_buf, vgpu->prop_size);	
+		copy_to_user_safe((void __user *)arg->dst, vgpu->prop_buf, arg->dstSize);	
 	}
 	else 
 		pr_err("Failed to find properties of device id %d.\n", device);
@@ -2768,6 +2768,7 @@ static void handle_control_message(struct virtio_device *vdev,
 			vgpu->id = *(uint32_t*)(buf->buf +start);
 			gldebug("vgpu id=%u\n", vgpu->id);
 			vgpu->prop_size = prop_size - sizeof(uint32_t);
+			gldebug("prop size=%u\n", vgpu->prop_size);
 			vgpu->prop_buf = kmalloc(vgpu->prop_size, GFP_KERNEL);
 			if (!vgpu->prop_buf) {
 				dev_err(&portdev->vdev->dev,

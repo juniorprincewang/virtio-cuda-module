@@ -187,6 +187,15 @@ void __cudaUnregisterFatBinary(void **fatCubinHandle)
 		free(fatCubinHandle);
 }
 
+void CUDARTAPI __cudaRegisterFatBinaryEnd(
+  void **fatCubinHandle
+)
+{
+	func();
+	return ;
+}
+
+
 void __cudaRegisterFunction(
 	void 		**fatCubinHandle,
 	const char	*hostFun,
@@ -255,6 +264,18 @@ char __cudaInitModule(void **fatCubinHandle)
 	return 'U';
 }
 
+cudaError_t  __cudaPopCallConfiguration(
+  dim3         *gridDim,
+  dim3         *blockDim,
+  size_t       *sharedMem,
+  void         *stream
+)
+{
+	func();
+	return cudaSuccess;
+}
+
+
 cudaError_t cudaConfigureCall(
 	dim3 gridDim, dim3 blockDim, size_t sharedMem, cudaStream_t stream)
 {
@@ -295,6 +316,19 @@ cudaError_t cudaSetupArgument(const void* arg, size_t size, size_t offset)
 	debug("value = %llx\n", *(unsigned long long*)&cudaKernelPara[cudaParaSize]);
 	cudaParaSize += size;
 	(*((uint32_t*)cudaKernelPara))++;
+	return cudaSuccess;
+}
+
+cudaError_t cudaLaunchKernel(
+	const void *func,
+	dim3 gridDim,
+	dim3 blockDim,
+	void **args,
+	size_t sharedMem,
+	cudaStream_t stream
+)
+{
+	func();
 	return cudaSuccess;
 }
 
