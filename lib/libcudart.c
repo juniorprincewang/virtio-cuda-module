@@ -396,17 +396,17 @@ cudaError_t cudaFree (void *devPtr)
 
 cudaError_t cudaGetDevice(int *device)
 {
-	// VirtIOArg arg;
-	// func();
-	// memset(&arg, 0, sizeof(VirtIOArg));
-	// arg.cmd = VIRTIO_CUDA_GETDEVICE;
-	// arg.dst = (uint64_t)device;
-	// arg.dstSize = sizeof(int);
-	// arg.tid = syscall(SYS_gettid);
-	// send_to_device(VIRTIO_IOC_GETDEVICE, &arg);
-	// return (cudaError_t)arg.cmd;
-	*device = minor;
-	return cudaSuccess;
+	VirtIOArg arg;
+	func();
+	memset(&arg, 0, sizeof(VirtIOArg));
+	arg.cmd = VIRTIO_CUDA_GETDEVICE;
+	arg.dst = (uint64_t)device;
+	arg.dstSize = sizeof(int);
+	arg.tid = syscall(SYS_gettid);
+	send_to_device(VIRTIO_IOC_GETDEVICE, &arg);
+	return (cudaError_t)arg.cmd;
+	// *device = minor;
+	// return cudaSuccess;
 }
 
 cudaError_t cudaGetDeviceProperties(struct cudaDeviceProp *prop, int device)
@@ -420,7 +420,9 @@ cudaError_t cudaGetDeviceProperties(struct cudaDeviceProp *prop, int device)
 	arg.flag = device;
 	arg.tid = syscall(SYS_gettid);
 	send_to_device(VIRTIO_IOC_GETDEVICEPROPERTIES, &arg);
-	return (cudaError_t)arg.cmd;	
+	if(!prop)
+		return cudaErrorInvalidDevice;
+	return cudaSuccess;
 }
 
 cudaError_t cudaSetDevice(int device)

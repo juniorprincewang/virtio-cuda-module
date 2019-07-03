@@ -8,6 +8,8 @@
 
 #include <stdint.h>
 #include <sys/ioctl.h>
+#include "cuda.h"
+#include "cuda_runtime.h"
 
 #define VIRTIO_CUDA_HELLO 0
 /** module control	**/
@@ -52,6 +54,11 @@
 #define VIRTIO_CUDA_MEMGETINFO 32
 
 
+struct GPUDevice {
+	uint32_t device_id;
+	struct cudaDeviceProp prop;
+};
+
 
 #else
 
@@ -71,6 +78,7 @@
 #define RSA_PKCS1_OAEP_PADDING	4
 
 #endif
+
 
 /*
  * function arguments

@@ -1158,6 +1158,22 @@ static int port_fops_fasync(int fd, struct file *filp, int mode)
 	return fasync_helper(fd, filp, mode, &port->async_queue);
 }
 
+static struct vgpu_device *find_gpu_by_device(struct ports_device *portdev, u32 device)
+{
+	struct vgpu_device *gpu;
+	unsigned long flags;
+
+	spin_lock_irqsave(&portdev->vgpus_lock, flags);
+	list_for_each_entry(gpu, &portdev->vgpus, list)
+		if (gpu->id == device)
+			goto out;
+	gpu = NULL;
+out:
+	spin_unlock_irqrestore(&portdev->vgpus_lock, flags);
+
+	return gpu;
+}
+
 unsigned int copy_from_user_safe(void *to, void *from, unsigned long size)
 {
 	unsigned long err = 0;	
@@ -1668,57 +1684,35 @@ int cuda_free(VirtIOArg __user *arg, struct port *port)
 
 int cuda_get_device_properties(VirtIOArg __user *arg, struct port *port)
 {
-	VirtIOArg *payload;
-	void *gva;
-	int ret;
-	uint32_t dst_size;
+	int device;
+	struct vgpu_device *vgpu;
 	func();
-	
-	// if(get_user(dst_size, &arg->dstSize)){
-	// 	pr_err("[ERROR] can not get dst_size\n");	
-	// 	return -EFAULT;
-	// }
 
-	// payload = (VirtIOArg *)memdup_user(arg, arg_len);
-	// if(!payload) {
-	// 	pr_err("[ERROR] can not malloc 0x%x memory\n", arg_len);
-	// 	return -ENOMEM;
-	// }
+	if(get_user(device, &arg->flag)){
+		pr_err("[ERROR] can not get device id\n");
+		return -EFAULT;
+	}
+	gldebug("device id is %d.\n", device);
 
-	// gva = kmalloc(dst_size, GFP_KERNEL);
-	// if(!gva) {
-	// 	pr_err("[ERROR] can not malloc 0x%x memory\n", dst_size);	
-	// 	return -ENOMEM;
-	// }
-	// payload->dst = (uint64_t)virt_to_phys(gva);
-
-	// ret = send_to_virtio(port, (void*)payload, arg_len);
-	// gldebug("[+] now analyse return buf\n");
-	// gldebug("[+] arg->cmd = %d\n", payload->cmd);
-	// put_user(payload->cmd, &arg->cmd);
-	// copy_to_user_safe((void __user *)arg->dst, gva, dst_size);	
-	// kfree(gva);
-	// kfree(payload);
-	// return ret;
+	vgpu = find_gpu_by_device(port->portdev, device);
+	gldebug("dst_size is %u.\n", arg->dstSize);
+	if (vgpu) {
+		gldebug("prop_size is %u.\n", vgpu->prop_size);
+		copy_to_user_safe((void __user *)arg->dst, vgpu->prop_buf, vgpu->prop_size);	
+	}
+	else 
+		pr_err("Failed to find properties of device id %d.\n", device);
+	return 0;
 }
 
 int cuda_get_device_count(VirtIOArg __user *arg, struct port *port)
 {
 	VirtIOArg *payload;
-	int ret = 0;
 	func();
-	// payload = (VirtIOArg *)memdup_user(arg, arg_len);
-	// if(!payload) {
-	// 	pr_err("[ERROR] can not malloc 0x%x memory\n", arg_len);
-	// 	return -ENOMEM;
-	// }
-	// ret = send_to_virtio(port, (void *)payload, arg_len);
-	// gldebug("[+] now analyse return buf\n");
-	// gldebug("[+] arg->cmd = %d\n", payload->cmd);
-	// put_user(payload->cmd, &arg->cmd);
-	// put_user(payload->flag, &arg->flag);
-	// kfree(payload);
-	// return ret;
+	put_user(0, &arg->cmd);
+	gldebug("gpu count=%d\n", port->portdev->nr_vgpus);
+	put_user(port->portdev->nr_vgpus, &arg->flag);
+	return 0;
 }
 
 int cuda_get_device(VirtIOArg __user *arg, struct port *port)
@@ -2601,10 +2595,6 @@ static int add_port(struct ports_device *portdev, u32 id)
 	 * caching, whether this is a console port, etc.)
 	 */
 	send_control_msg(port, VIRTIO_CONSOLE_PORT_READY, 1);
-
-	// if(list_empty(&portdev->vgpus))
-	// 	send_control_msg(port, VIRTIO_CONSOLE_VGPU, 1);
-
 	
 	if (pdrvdata.debugfs_dir) {
 		/*
@@ -2751,37 +2741,45 @@ static void handle_control_message(struct virtio_device *vdev,
 	func();
 	cpkt = (struct virtio_console_control *)(buf->buf + buf->offset);
 	gldebug("cpkt->event = %d\n", cpkt->event);
+
 	if(virtio16_to_cpu(vdev, cpkt->event) == VIRTIO_CONSOLE_VGPU) {
 		/*
 		 * Skip the size of the header and the cpkt to get the size
-		 * of the name that was sent
+		 * of the GPU's prop that was sent
 		 */
 		buf_size = buf->len - buf->offset - sizeof(*cpkt) ;
 		//!!!! be  careful of transferring int type !!!!!!!
 		nr_gpu = *(u32*)(buf->buf + buf->offset + sizeof(*cpkt));
 		prop_size = (buf_size-sizeof(u32))/nr_gpu;
 		start =  buf->offset + sizeof(*cpkt) + sizeof(u32);
-
-		for(i=0; i<buf_size; i+= prop_size) {
+		for(i=0; i< nr_gpu; i++) {
 			vgpu = kmalloc(sizeof(*vgpu), GFP_KERNEL);
 			if (!vgpu) {
 				dev_err(&portdev->vdev->dev,
 					"Not enough space to store vgpu.\n");
 				return;
 			}
-			vgpu->id = i;
-			vgpu->prop_size = prop_size;
-			vgpu->prop_buf = kmalloc(prop_size, GFP_KERNEL);
+			/* the shared data structure is as follows:
+			* struct {
+			* 	uint32_t device_id;
+			* 	struct cudaDeviceProp prop;
+			* }
+			*/
+			vgpu->id = *(uint32_t*)(buf->buf +start);
+			gldebug("vgpu id=%u\n", vgpu->id);
+			vgpu->prop_size = prop_size - sizeof(uint32_t);
+			vgpu->prop_buf = kmalloc(vgpu->prop_size, GFP_KERNEL);
 			if (!vgpu->prop_buf) {
 				dev_err(&portdev->vdev->dev,
 					"Not enough space to store vgpu prop.\n");
 				return;
 			}
-			strncpy(vgpu->prop_buf, buf->buf +start+i, prop_size);
+			strncpy(vgpu->prop_buf, buf->buf +start+sizeof(uint32_t),
+					vgpu->prop_size);
 			spin_lock_irq(&portdev->vgpus_lock);
 			list_add_tail(&vgpu->list, &portdev->vgpus);
 			spin_unlock_irq(&portdev->vgpus_lock);
-
+			start+=prop_size;
 		}
 		portdev->nr_vgpus = nr_gpu;
 

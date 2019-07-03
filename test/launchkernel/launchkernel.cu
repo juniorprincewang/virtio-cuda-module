@@ -48,17 +48,18 @@ int main()
 	dim3 blocks(1,1);
 	//test();
 
-	//cudaGetDeviceCount(&count);
-	//printf("cuda count=%d\n", count);	
-	/*
+	cudaGetDeviceCount(&count);
+	printf("cuda count=%d\n", count);	
+	// return 0;
+	
 	printf("[=] Before devID is %d\n",  devID);
 	cudaGetDevice(&devID);
 	printf("[=] After devID is %d\n",  devID);
-	
+	printf("prop=%d\n", sizeof(struct cudaDeviceProp));	
 	cudaGetDeviceProperties(&props, devID);
 	printf("Device %d: \"%s\" with Compute %d.%d capability\n",devID, props.name, props.major, props.minor);
 	return 0;
-*/
+
 	a=(int*)malloc(sizeof(int)*2);
 	a[0]=1;
 	a[1]=2;
