@@ -1362,9 +1362,6 @@ int cuda_unregister_fatbinary(VirtIOArg __user *arg, struct port *port)
 	}
 
 	ret = send_to_virtio(port, (void*)payload, arg_len);
-	gldebug("[+] Now analyse return buf\n");
-	gldebug("[+] arg->cmd = %d\n", payload->cmd);
-	put_user(payload->cmd, &arg->cmd);
 	kfree(payload);
 	return ret;
 }
@@ -1830,9 +1827,6 @@ int cuda_device_reset(VirtIOArg __user *arg, struct port *port)
 	}
 
 	ret = send_to_virtio(port, (void*)payload, arg_len);
-	gldebug("[+] now analyse return buf\n");
-	gldebug("[+] arg->cmd = %d\n", payload->cmd);
-	put_user(payload->cmd, &arg->cmd);
 	kfree(payload);
 	return ret;
 }

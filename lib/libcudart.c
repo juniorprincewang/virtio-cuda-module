@@ -187,7 +187,7 @@ void __cudaUnregisterFatBinary(void **fatCubinHandle)
 		free(fatCubinHandle);
 }
 
-void CUDARTAPI __cudaRegisterFatBinaryEnd(
+void __cudaRegisterFatBinaryEnd(
   void **fatCubinHandle
 )
 {
@@ -258,6 +258,48 @@ void __cudaRegisterVar(
 	debug("Undefined\n");
 }
 
+void __cudaRegisterManagedVar(
+	void **fatCubinHandle,
+	void **hostVarPtrAddress,
+	char  *deviceAddress,
+	const char  *deviceName,
+	int    ext,
+	size_t size,
+	int    constant,
+	int    global
+)
+{
+	func();
+	debug("Undefined\n");
+}
+
+void __cudaRegisterTexture(
+	void                    **fatCubinHandle,
+	const struct textureReference  *hostVar,
+	const void                    **deviceAddress,
+	const char                     *deviceName,
+	int                       dim,
+	int                       norm,
+	int                        ext
+)
+{
+	func();
+	debug("Undefined\n");
+}
+
+void __cudaRegisterSurface(
+	void                    **fatCubinHandle,
+	const struct surfaceReference  *hostVar,
+	const void                    **deviceAddress,
+	const char                     *deviceName,
+	int                       dim,
+	int                       ext
+)
+{
+	func();
+	debug("Undefined\n");
+}
+
 char __cudaInitModule(void **fatCubinHandle)
 {
 	func();
@@ -272,9 +314,33 @@ cudaError_t  __cudaPopCallConfiguration(
 )
 {
 	func();
+	debug("Undefined\n");
 	return cudaSuccess;
 }
 
+unsigned  __cudaPushCallConfiguration(
+	dim3         gridDim,
+	dim3         blockDim,
+	size_t sharedMem,
+	struct CUstream_st *stream
+)
+{
+	func();
+	debug("gridDim= %u %u %u\n", gridDim.x, gridDim.y, gridDim.z);	
+	debug("blockDim= %u %u %u\n", blockDim.x, blockDim.y, blockDim.z);
+	debug("sharedMem= %zu\n", sharedMem);
+	debug("stream= %lu\n", (cudaStream_t)(stream));
+	
+	memset(cudaKernelPara, 0, 512);
+	cudaParaSize = sizeof(uint32_t);
+
+	memset(&kernelConf, 0, sizeof(KernelConf_t));
+	kernelConf.gridDim = gridDim;
+	kernelConf.blockDim = blockDim;
+	kernelConf.sharedMem = sharedMem;
+	kernelConf.stream = (cudaStream_t)stream;
+	return 0;
+}
 
 cudaError_t cudaConfigureCall(
 	dim3 gridDim, dim3 blockDim, size_t sharedMem, cudaStream_t stream)
@@ -328,7 +394,13 @@ cudaError_t cudaLaunchKernel(
 	cudaStream_t stream
 )
 {
+	uint32_t fid;
 	func();
+	fid=(uint32_t)func;
+	debug("func id = %u\n", fid);
+	debug("szieof(args)=%u\n", sizeof(args));
+	debug("szieof(args[0])=%u\n", sizeof(args[0]));
+
 	return cudaSuccess;
 }
 
@@ -491,7 +563,7 @@ cudaError_t cudaDeviceReset(void)
 	arg.cmd = VIRTIO_CUDA_DEVICERESET;
 	arg.tid = syscall(SYS_gettid);
 	send_to_device(VIRTIO_IOC_DEVICERESET, &arg);
-	return (cudaError_t)arg.cmd;	
+	return cudaSuccess;	
 }
 
 cudaError_t cudaDeviceSynchronize(void)
