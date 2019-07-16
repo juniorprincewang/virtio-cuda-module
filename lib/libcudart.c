@@ -13,7 +13,8 @@
 #include <unistd.h>	// close
 #include <sys/syscall.h> // SYS_gettid
 #include "../virtio-ioc.h"
-#include <errno.h>
+#include <errno.h>	// errno
+#include <sys/mman.h>	// mmap, PROT_READ, PROT_WRITE, MAP_SHARED
 
 #define DEVICE_FILE "/dev/cudaport2p%d"
 
@@ -50,6 +51,86 @@ static KernelConf_t kernelConf;
 static int fd=-1;			// fd of device file
 static int device_count=0;	// virtual device number
 static int minor = 0;		// get current device
+
+extern void *__libc_malloc(size_t);
+static unsigned int map_offset=0;
+static size_t const BLOCK_MAGIC = 0xdeadbeaf;
+
+typedef struct block_header
+{
+    void* address;
+    size_t total_size;
+    size_t data_size;
+    size_t magic;
+} BlockHeader;
+
+
+BlockHeader* get_block_by_ptr(void* p)
+{
+    void* ptr = (char*)p - sizeof(BlockHeader);
+    BlockHeader* blk = (BlockHeader*)ptr;
+
+    if (blk->magic != BLOCK_MAGIC)
+    {
+        // error("bad magic in block %p\n", p);
+        return NULL;
+    }
+
+    return blk;
+}
+
+static size_t roundup(size_t n, size_t alignment)
+{
+    return (n + alignment - 1) / alignment * alignment;
+}
+
+static void *__mmalloc(size_t size)
+{
+	int alignment = 8;
+    size_t data_start_offset = roundup(sizeof(BlockHeader), alignment);
+    size_t header_start_offset = data_start_offset - sizeof(BlockHeader);
+    size_t total_size = data_start_offset + size;
+
+	unsigned int blocks_num = (total_size+KMALLOC_SIZE-1)/KMALLOC_SIZE;
+	void *ptr = mmap(0, blocks_num * KMALLOC_SIZE, PROT_READ|PROT_WRITE, 
+						MAP_SHARED, fd, map_offset);
+	if(ptr == MAP_FAILED) {
+		error("mmap failed, error: %s.\n", strerror(errno));
+		return NULL;
+	}
+
+	map_offset += blocks_num*KMALLOC_SIZE;
+
+	BlockHeader* blk = (BlockHeader*)((char*)ptr + header_start_offset);
+    blk->address = ptr;
+    blk->total_size    = blocks_num * KMALLOC_SIZE;
+    blk->data_size     = size;
+    blk->magic         = BLOCK_MAGIC;
+
+	msync(ptr, blocks_num*KMALLOC_SIZE, MS_ASYNC);
+    return (char*)ptr + data_start_offset;
+}
+
+void *malloc(size_t size)
+{
+	if (size > KMALLOC_SIZE)
+		return __mmalloc(size);
+	return __libc_malloc(size);
+}
+
+void free(void *ptr)
+{
+	if (ptr == NULL)
+        return;
+
+    BlockHeader* blk = get_block_by_ptr(ptr);
+    if(!blk) {
+		__libc_free(ptr);
+		return;
+    }
+    munmap(blk->address, blk->total_size);
+}
+
 /*
  * ioctl
 */
@@ -329,7 +410,7 @@ unsigned  __cudaPushCallConfiguration(
 	debug("gridDim= %u %u %u\n", gridDim.x, gridDim.y, gridDim.z);	
 	debug("blockDim= %u %u %u\n", blockDim.x, blockDim.y, blockDim.z);
 	debug("sharedMem= %zu\n", sharedMem);
-	debug("stream= %lu\n", (cudaStream_t)(stream));
+	// debug("stream= %lu\n", (cudaStream_t)(stream));
 	
 	memset(cudaKernelPara, 0, 512);
 	cudaParaSize = sizeof(uint32_t);
@@ -398,8 +479,8 @@ cudaError_t cudaLaunchKernel(
 	func();
 	fid=(uint32_t)func;
 	debug("func id = %u\n", fid);
-	debug("szieof(args)=%u\n", sizeof(args));
-	debug("szieof(args[0])=%u\n", sizeof(args[0]));
+	debug("szieof(args)=%lu\n", sizeof(args));
+	debug("szieof(args[0])=%lu\n", sizeof(args[0]));
 
 	return cudaSuccess;
 }
@@ -407,10 +488,22 @@ cudaError_t cudaLaunchKernel(
 cudaError_t cudaLaunch(const void *entry)
 {
 	VirtIOArg arg;
+	void *para;
 	func();
 	memset(&arg, 0, sizeof(VirtIOArg));
 	arg.cmd = VIRTIO_CUDA_LAUNCH;
 	arg.src = (uint64_t)&cudaKernelPara;
+	para = (void*)arg.src;
+	int para_idx = sizeof(uint32_t);
+	int para_num = *(uint32_t*)para;
+	debug("para_num=%d\n", para_num);
+	for(int i=0; i<para_num; i++) {
+		debug("i=%d\n", i);
+		debug("size = %u\n", *(uint32_t*)&para[para_idx]);
+		debug("value=%llx\n",*(unsigned long long*)&para[para_idx+sizeof(uint32_t)]);
+		para_idx += *(uint32_t*)&para[para_idx] + sizeof(uint32_t);
+	}
+
 	arg.srcSize = cudaParaSize;
 	arg.dst = (uint64_t)&kernelConf;
 	arg.dstSize = sizeof(KernelConf_t);

@@ -1,3 +1,3 @@
 #!/bin/bash
-./run &
+../process/delay &
 ./run

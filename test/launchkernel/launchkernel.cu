@@ -44,7 +44,7 @@ int main()
 	struct cudaDeviceProp props;
 	int *d_a, *d_b;
 	int *a, b;
-	int z=0;
+	int z=16;
 	dim3 threads(10,1);
 	dim3 blocks(1,1);
 	//test();
