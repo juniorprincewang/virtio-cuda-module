@@ -98,7 +98,7 @@ static void *__mmalloc(size_t size)
 		error("mmap failed, error: %s.\n", strerror(errno));
 		return NULL;
 	}
-
+	func();
 	map_offset += blocks_num*KMALLOC_SIZE;
 
 	BlockHeader* blk = (BlockHeader*)((char*)ptr + header_start_offset);
@@ -122,7 +122,7 @@ void free(void *ptr)
 {
 	if (ptr == NULL)
         return;
-
+    func();
     BlockHeader* blk = get_block_by_ptr(ptr);
     if(!blk) {
 		__libc_free(ptr);
@@ -821,3 +821,29 @@ cudaError_t cudaMemGetInfo(size_t *free, size_t *total)
 // 	send_to_device(VIRTIO_IOC_SETDEVICEFLAGS, &arg);
 // 	return (cudaError_t)arg.cmd;
 // }
+
+cudaError_t cudaHostRegister(void *ptr, size_t size, unsigned int flags)
+{
+	VirtIOArg arg;
+	func();
+	memset(&arg, 0, sizeof(VirtIOArg));
+	arg.cmd = VIRTIO_CUDA_HOSTREGISTER;
+	arg.tid = syscall(SYS_gettid);
+	arg.src = (uint64_t)ptr;
+	arg.srcSize = size;
+	arg.flag = flags;
+	send_to_device(VIRTIO_IOC_HOSTREGISTER, &arg);
+	return (cudaError_t)arg.cmd;
+}
+
+cudaError_t cudaHostUnregister(void *ptr)
+{
+	VirtIOArg arg;
+	func();
+	memset(&arg, 0, sizeof(VirtIOArg));
+	arg.cmd = VIRTIO_CUDA_HOSTUNREGISTER;
+	arg.tid = syscall(SYS_gettid);
+	arg.src = (uint64_t)ptr;
+	send_to_device(VIRTIO_IOC_HOSTUNREGISTER, &arg);
+	return (cudaError_t)arg.cmd;
+}

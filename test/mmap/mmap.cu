@@ -83,6 +83,7 @@ int main()
 	printf("minor=%d\n", minor);
 	printf("page size = %u\n", pagesize);
 	char *bp = (char *)malloc(pagesize*1025);
+	printf("bp addr = %p\n", bp);
 	memcpy(bp, s, 4);
 	printf("%s\n", bp);
 	free(bp);
