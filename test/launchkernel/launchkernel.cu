@@ -53,7 +53,7 @@ int main()
 	float *h_a=0;
 	dim3 block, grid;
 	int num = 1 << 4;
-    int nbytes = num * sizeof(int);
+    int nbytes = num * sizeof(float);
     int value=16;
 	//test();
 
@@ -78,13 +78,13 @@ int main()
     block = dim3(4);
     grid  = dim3((num + block.x - 1) / block.x);
 
-	// cudaMemcpy(d_a, h_a, nbytes, cudaMemcpyHostToDevice);
-	// kernel<<<grid, block>>>(d_a, value);
+	cudaMemcpy(d_a, h_a, nbytes, cudaMemcpyHostToDevice);
+	kernel<<<grid, block>>>(d_a, value);
 	cudaMemcpy(h_a, d_a, nbytes, cudaMemcpyDeviceToHost);
+ 	bool bFinalResults = (bool) checkResult(h_a, num, value);
+	printf("result:%d\n", bFinalResults);
 	// end
 	free(h_a);
 	cudaFree(d_a);
- 	bool bFinalResults = (bool) checkResult(h_a, num, value);
-	printf("result:%d\n", bFinalResults);
 	return 0;
 }
