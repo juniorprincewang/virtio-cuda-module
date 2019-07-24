@@ -19,6 +19,7 @@ __global__ void kernel(float *g_data, float value)
 {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     g_data[idx] = g_data[idx] + value;
+    printf("%f+g_data[%d]=%f\n", value, idx, g_data[idx]);
 }
 
 int checkResult(float *data, const int n, const float x)
@@ -73,7 +74,7 @@ int main()
 	memset(h_a, 0, nbytes);
 	// start
 	cudaMalloc((void**)&d_a, nbytes);
-	cudaMemset(d_a, 255, nbytes);
+	cudaMemset(d_a, 0, nbytes);
 	// set kernel launch configuration
     block = dim3(4);
     grid  = dim3((num + block.x - 1) / block.x);
