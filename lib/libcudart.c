@@ -122,7 +122,7 @@ void free(void *ptr)
 {
 	if (ptr == NULL)
         return;
-    func();
+    
     BlockHeader* blk = get_block_by_ptr(ptr);
     if(!blk) {
 		__libc_free(ptr);
@@ -559,7 +559,8 @@ cudaError_t cudaMemcpyAsync(
 	arg.src = (uint64_t)src;
 	arg.srcSize = count;
 	arg.dst = (uint64_t)dst;
-	arg.dstSize = count;
+	arg.dstSize = (uint32_t)stream;
+	debug("stream = 0x%lx\n", (uint64_t)stream);
 	arg.param = (uint64_t)stream;
 	arg.tid = syscall(SYS_gettid);
 	send_to_device(VIRTIO_IOC_MEMCPY_ASYNC, &arg);
@@ -578,6 +579,57 @@ cudaError_t cudaMalloc(void **devPtr, size_t size)
 	send_to_device(VIRTIO_IOC_MALLOC, &arg);
 	*devPtr = (void *)arg.dst;
 	return (cudaError_t)arg.cmd;	
+}
+
+cudaError_t cudaHostRegister(void *ptr, size_t size, unsigned int flags)
+{
+	func();
+	/*
+	memset(&arg, 0, sizeof(VirtIOArg));
+	arg.cmd = VIRTIO_CUDA_HOSTREGISTER;
+	arg.tid = syscall(SYS_gettid);
+	arg.src = (uint64_t)ptr;
+	arg.srcSize = size;
+	arg.flag = flags;
+	send_to_device(VIRTIO_IOC_HOSTREGISTER, &arg);
+	return (cudaError_t)arg.cmd;
+	*/
+	return cudaSuccess;
+}
+
+cudaError_t cudaHostUnregister(void *ptr)
+{
+	VirtIOArg arg;
+	func();
+	memset(&arg, 0, sizeof(VirtIOArg));
+	arg.cmd = VIRTIO_CUDA_HOSTUNREGISTER;
+	arg.tid = syscall(SYS_gettid);
+	arg.src = (uint64_t)ptr;
+	send_to_device(VIRTIO_IOC_HOSTUNREGISTER, &arg);
+	return (cudaError_t)arg.cmd;
+}
+
+cudaError_t cudaHostAlloc(void **pHost, size_t size, unsigned int flags)
+{
+	func();
+	*pHost = __mmalloc(size);
+	return cudaHostRegister(*pHost, size, flags);
+}
+
+cudaError_t cudaMallocHost(void **ptr, size_t size)
+{
+	func();
+	return cudaHostAlloc(ptr, size, cudaHostAllocDefault);
+}
+
+cudaError_t cudaFreeHost(void *ptr)
+{
+	BlockHeader* blk = get_block_by_ptr(ptr);
+	func();
+    if(!blk) {
+		return;
+    }
+    munmap(blk->address, blk->total_size);
 }
 
 cudaError_t cudaFree (void *devPtr)
@@ -737,12 +789,10 @@ cudaError_t cudaEventRecord(cudaEvent_t event, cudaStream_t stream)
 	func();
 	memset(&arg, 0, sizeof(VirtIOArg));
 	arg.cmd = VIRTIO_CUDA_EVENTRECORD;
-	debug("event = %lu\n", (uint64_t)event);
+	debug("event = 0x%lx\n", (uint64_t)event);
+	debug("stream = 0x%lx\n", (uint64_t)stream);
 	arg.src = (uint64_t)event;
-	if(NULL == stream)
-		arg.dst = (uint64_t)(-1);
-	else
-		arg.dst = (uint64_t)stream;
+	arg.dst = (uint64_t)stream;
 	arg.tid = syscall(SYS_gettid);
 	send_to_device(VIRTIO_IOC_EVENTRECORD, &arg);
 	return (cudaError_t)arg.cmd;	
@@ -821,29 +871,3 @@ cudaError_t cudaMemGetInfo(size_t *free, size_t *total)
 // 	send_to_device(VIRTIO_IOC_SETDEVICEFLAGS, &arg);
 // 	return (cudaError_t)arg.cmd;
 // }
-
-cudaError_t cudaHostRegister(void *ptr, size_t size, unsigned int flags)
-{
-	VirtIOArg arg;
-	func();
-	memset(&arg, 0, sizeof(VirtIOArg));
-	arg.cmd = VIRTIO_CUDA_HOSTREGISTER;
-	arg.tid = syscall(SYS_gettid);
-	arg.src = (uint64_t)ptr;
-	arg.srcSize = size;
-	arg.flag = flags;
-	send_to_device(VIRTIO_IOC_HOSTREGISTER, &arg);
-	return (cudaError_t)arg.cmd;
-}
-
-cudaError_t cudaHostUnregister(void *ptr)
-{
-	VirtIOArg arg;
-	func();
-	memset(&arg, 0, sizeof(VirtIOArg));
-	arg.cmd = VIRTIO_CUDA_HOSTUNREGISTER;
-	arg.tid = syscall(SYS_gettid);
-	arg.src = (uint64_t)ptr;
-	send_to_device(VIRTIO_IOC_HOSTUNREGISTER, &arg);
-	return (cudaError_t)arg.cmd;
-}

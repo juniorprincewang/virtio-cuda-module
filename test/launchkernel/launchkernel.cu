@@ -1,6 +1,6 @@
 #include <cuda.h>
 #include <stdio.h>
-__global__ void kernel(int *a, int *b, int c)
+__global__ void kernel2(int *a, int *b, int c)
 {
 	int tx = threadIdx.x;
 	switch (tx)
@@ -15,17 +15,24 @@ __global__ void kernel(int *a, int *b, int c)
 			break;
 	}
 }
-
-__global__ void kernel2(int *a, int *b, int *c, int *d)
+__global__ void kernel(float *g_data, float value)
 {
-	int tx = threadIdx.x;
-	a[tx] = a[tx] + 10;
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    g_data[idx] = g_data[idx] + value;
 }
 
-__global__ void kernel3(int *a)
+int checkResult(float *data, const int n, const float x)
 {
-	int tx = threadIdx.x;
-	a[tx] = a[tx] + 20;
+    for (int i = 0; i < n; i++)
+    {
+        if (data[i] != x)
+        {
+            printf("Error! data[%d] = %f, ref = %f\n", i, data[i], x);
+            return 0;
+        }
+    }
+
+    return 1;
 }
 
 void test()
@@ -42,11 +49,12 @@ int main()
 	int devID=1;
 	int count = 0;
 	struct cudaDeviceProp props;
-	int *d_a, *d_b;
-	int *a, b;
-	int z=16;
-	dim3 threads(10,1);
-	dim3 blocks(1,1);
+	float *d_a=0;
+	float *h_a=0;
+	dim3 block, grid;
+	int num = 1 << 4;
+    int nbytes = num * sizeof(int);
+    int value=16;
 	//test();
 
 	cudaGetDeviceCount(&count);
@@ -61,40 +69,22 @@ int main()
 	printf("Device %d: \"%s\" with Compute %d.%d capability\n",devID, props.name, props.major, props.minor);
 	// return 0;
 
-	a=(int*)malloc(sizeof(int)*2);
-	a[0]=1;
-	a[1]=2;
-	b = 16;
+	h_a=(float*)malloc(nbytes);
+	memset(h_a, 0, nbytes);
 	// start
-	cudaMalloc((void**)&d_a, sizeof(int)*2);
-	cudaMalloc((void**)&d_b, sizeof(int));
-	cudaMemcpy(d_a, a, sizeof(int)*2, cudaMemcpyHostToDevice);
-	cudaMemcpy(d_b, &b, sizeof(int), cudaMemcpyHostToDevice);
-	printf("a[0] = %d, a[1] = %d\n", a[0], a[1]);
-	kernel<<<blocks, threads>>>(d_a, d_b, z);
-	cudaMemcpy(a, d_a, sizeof(int)*2, cudaMemcpyDeviceToHost);
+	cudaMalloc((void**)&d_a, nbytes);
+	cudaMemset(d_a, 255, nbytes);
+	// set kernel launch configuration
+    block = dim3(4);
+    grid  = dim3((num + block.x - 1) / block.x);
+
+	// cudaMemcpy(d_a, h_a, nbytes, cudaMemcpyHostToDevice);
+	// kernel<<<grid, block>>>(d_a, value);
+	cudaMemcpy(h_a, d_a, nbytes, cudaMemcpyDeviceToHost);
 	// end
-	printf("a[0] = %d, a[1] = %d\n", a[0], a[1]);
+	free(h_a);
 	cudaFree(d_a);
-	cudaFree(d_b);
-
-	return 0;
-
-	cudaMemcpy(d_a, a, sizeof(int)*2, cudaMemcpyHostToDevice);
-	printf("a[0] = %d, a[1] = %d\n", a[0], a[1]);
-	kernel2<<<blocks, threads>>>(d_a, d_a, d_a, d_a);
-	cudaMemcpy(a, d_a, sizeof(int)*2, cudaMemcpyDeviceToHost);
-	// end
-	printf("a[0] = %d, a[1] = %d\n", a[0], a[1]);
-
-	cudaMemcpy(d_a, a, sizeof(int)*2, cudaMemcpyHostToDevice);
-	printf("a[0] = %d, a[1] = %d\n", a[0], a[1]);
-	kernel3<<<blocks, threads>>>(d_a);
-	cudaMemcpy(a, d_a, sizeof(int)*2, cudaMemcpyDeviceToHost);
-	// end
-	printf("a[0] = %d, a[1] = %d\n", a[0], a[1]);
-
-
-	cudaFree(d_a);
+ 	bool bFinalResults = (bool) checkResult(h_a, num, value);
+	printf("result:%d\n", bFinalResults);
 	return 0;
 }
