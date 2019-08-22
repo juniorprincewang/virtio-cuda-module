@@ -1,5 +1,15 @@
 #include <cuda.h>
 #include <stdio.h>
+
+#define CHECK(call) { \
+	cudaError_t err; \
+	if ( (err = (call)) != cudaSuccess) { \
+		fprintf(stderr, "Got error %s at %s:%d\n", cudaGetErrorString(err), \
+				__FILE__, __LINE__); \
+		exit(1); \
+	} \
+}
+
 __global__ void kernel2(int *a, int *b, int c)
 {
 	int tx = threadIdx.x;
@@ -47,6 +57,12 @@ void test()
 
 int main()
 {
+	/* test case 1
+	* for 	__cudaRegisterFatBinary
+			__cudaUnregisterFatBinary
+			__cudaRegisterFunction
+	*/
+	// return 0;
 	int devID=1;
 	int count = 0;
 	struct cudaDeviceProp props;
@@ -57,10 +73,14 @@ int main()
     int nbytes = num * sizeof(float);
     int value=16;
 	//test();
-
+	/* test case 2
+	* add 	cudaGetDeviceCount
+			cudaGetDevice
+			cudaGetDeviceProperties
+	*/
+/*
 	cudaGetDeviceCount(&count);
-	printf("cuda count=%d\n", count);	
-	// return 0;
+	printf("cuda count=%d\n", count);
 	
 	printf("[=] Before devID is %d\n",  devID);
 	cudaGetDevice(&devID);
@@ -69,23 +89,36 @@ int main()
 	cudaGetDeviceProperties(&props, devID);
 	printf("Device %d: \"%s\" with Compute %d.%d capability\n",devID, props.name, props.major, props.minor);
 	// return 0;
+*/
 
 	h_a=(float*)malloc(nbytes);
 	memset(h_a, 0, nbytes);
+	// h_a[0] = 1;
 	// start
-	cudaMalloc((void**)&d_a, nbytes);
-	cudaMemset(d_a, 0, nbytes);
+	CHECK(cudaMalloc((void**)&d_a, nbytes));
+	CHECK(cudaMemset(d_a, 0, nbytes));
+	
 	// set kernel launch configuration
     block = dim3(4);
     grid  = dim3((num + block.x - 1) / block.x);
 
-	cudaMemcpy(d_a, h_a, nbytes, cudaMemcpyHostToDevice);
+	
+	CHECK(cudaMemcpy(d_a, h_a, nbytes, cudaMemcpyHostToDevice));
 	kernel<<<grid, block>>>(d_a, value);
-	cudaMemcpy(h_a, d_a, nbytes, cudaMemcpyDeviceToHost);
+	CHECK(cudaMemcpy(h_a, d_a, nbytes, cudaMemcpyDeviceToHost));
  	bool bFinalResults = (bool) checkResult(h_a, num, value);
 	printf("result:%d\n", bFinalResults);
 	// end
 	free(h_a);
-	cudaFree(d_a);
-	return 0;
+	CHECK(cudaFree(d_a));
+
+	/* test case 3
+	* add 	cudaMalloc
+			cudaMemset
+			cudaMemcpy
+			cudaLaunch
+			cudaFree
+	*/
+
+	return EXIT_SUCCESS;
 }

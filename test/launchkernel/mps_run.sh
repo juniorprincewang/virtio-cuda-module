@@ -1,3 +1,4 @@
 #!/bin/bash
-../process/delay &
+# ../process/delay &
+./run &
 ./run

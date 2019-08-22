@@ -1,10 +1,25 @@
 #include <cuda.h>
 #include <stdio.h>
 
-__global__ void kernel(int *a)
+__global__ void kernel(float *g_data, float value)
 {
-	int tx = threadIdx.x;
-	a[tx] = a[tx] + 8;
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    g_data[idx] = g_data[idx] + value;
+    printf("%f+g_data[%d]=%f\n", value, idx, g_data[idx]);
+}
+
+int checkResult(float *data, const int n, const float x)
+{
+    for (int i = 0; i < n; i++)
+    {
+        if (data[i] != x)
+        {
+            printf("Error! data[%d] = %f, ref = %f\n", i, data[i], x);
+            return 0;
+        }
+    }
+
+    return 1;
 }
 
 
@@ -33,9 +48,9 @@ int main()
     }
 
 
-	a=(int*)malloc(sizeof(int)*2);
-	a[0]=1;
-	a[1]=2;
+	dim3 block = dim3(4);
+    dim3 grid  = dim3((num + block.x - 1) / block.x);
+
 	cudaMalloc((void**)&d_a, sizeof(int)*2);
 	cudaMemcpyAsync(d_a, a, sizeof(int)*2, cudaMemcpyHostToDevice, streams[0]);
 	printf("a[0] = %d, a[1] = %d\n", a[0], a[1]);
@@ -45,7 +60,7 @@ int main()
 	// start
 	cudaEventRecord(start_event, 0);
 	for (i = 0; i < nreps; i++) {
-		kernel<<<blocks, threads, 0, streams[0]>>>(d_a);
+		kernel<<<grid, block, 0, streams[0]>>>(d_a);
 	}
 	// end
 	cudaEventRecord(stop_event, 0);

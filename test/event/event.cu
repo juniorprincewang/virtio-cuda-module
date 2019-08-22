@@ -29,7 +29,6 @@ int main()
     struct cudaDeviceProp props;
     float *d_a=0;
     float *h_a=0;
-    dim3 block, grid;
     int num = 1 << 4;
     int nbytes = num * sizeof(float);
     int value=16;
@@ -54,8 +53,8 @@ int main()
     cudaMalloc((void**)&d_a, nbytes);
     cudaMemset(d_a, 0, nbytes);
     // set kernel launch configuration
-    block = dim3(4);
-    grid  = dim3((num + block.x - 1) / block.x);
+    dim3 block = dim3(4);
+    dim3 grid  = dim3((num + block.x - 1) / block.x);
 
     float ms; // elapsed time in milliseconds
     // create events and streams
