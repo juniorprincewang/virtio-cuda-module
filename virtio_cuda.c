@@ -3003,7 +3003,8 @@ static void handle_control_message(struct virtio_device *vdev,
 		prop_size = (buf_size-sizeof(u32))/nr_gpu;
 		start =  buf->offset + sizeof(*cpkt) + sizeof(u32);
 		for(i=0; i< nr_gpu; i++) {
-			vgpu = kmalloc(sizeof(*vgpu), GFP_KERNEL);
+			gldebug("one buff size=%lu\n", prop_size);
+			vgpu = kmalloc(sizeof(struct vgpu_device), GFP_KERNEL);
 			if (!vgpu) {
 				dev_err(&portdev->vdev->dev,
 					"Not enough space to store vgpu.\n");
@@ -3018,14 +3019,13 @@ static void handle_control_message(struct virtio_device *vdev,
 			vgpu->id = *(uint32_t*)(buf->buf +start);
 			gldebug("vgpu id=%u\n", vgpu->id);
 			vgpu->prop_size = prop_size - sizeof(uint32_t);
-			gldebug("prop size=%u\n", vgpu->prop_size);
 			vgpu->prop_buf = kmalloc(vgpu->prop_size, GFP_KERNEL);
 			if (!vgpu->prop_buf) {
 				dev_err(&portdev->vdev->dev,
 					"Not enough space to store vgpu prop.\n");
 				return;
 			}
-			strncpy(vgpu->prop_buf, buf->buf +start+sizeof(uint32_t),
+			memcpy(vgpu->prop_buf, buf->buf +start+sizeof(uint32_t),
 					vgpu->prop_size);
 			spin_lock_irq(&portdev->vgpus_lock);
 			list_add_tail(&vgpu->list, &portdev->vgpus);
@@ -3033,8 +3033,7 @@ static void handle_control_message(struct virtio_device *vdev,
 			start+=prop_size;
 		}
 		portdev->nr_vgpus = nr_gpu;
-
-		gldebug("portdev->nr_vgpus=%u\n", nr_gpu);
+		// gldebug("portdev->nr_vgpus=%u\n", nr_gpu);
 		return;
 	}
 
