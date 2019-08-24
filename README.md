@@ -13,7 +13,7 @@ The front-end driver is responsible for the memory management, data movement, an
 #### Host
 
 * Ubuntu 16.04.5 LTS (kernel v4.15.0-29-generic  )
-* cuda-8.0
+* cuda-9.1
 * PATH
 
 ```sh
@@ -34,7 +34,7 @@ automake libtool libsdl1.2-dev libsasl2-dev libcurl4-openssl-dev libsasl2-dev li
 #### Guest
 
 * Ubuntu 16.04 image (guest OS)
-* cuda-8.0 toolkit
+* cuda-9.1 toolkit
 
 ### How to install
 
@@ -62,7 +62,7 @@ After installing qCUdriver and qCUlibrary in the guest OS, modify the
 internal flags in the Makefile as below:  
 ```shell
 # internal flags
-NVCCFLAGS   := -m${TARGET_SIZE} -cudart=shared      
+NVCCFLAGS   := -m${TARGET_SIZE} --cudart=shared      
 ```
 
 Finally, run make and perform the executable file without change any 
@@ -71,6 +71,17 @@ source code by `LD_PRELOAD` or change the `LD_LIBRARY_PATH`.
 ```sh
 LD_PRELOAD=\path\to\libvcuda.so ./vectorAdd
 ```
+
++ benchmarking vectorAdd
+
+A command-line benchmarking tool [hyperfine](https://github.com/sharkdp/hyperfine) is recommended.  
+To run a benchmark, you can simply call `hyperfine <command>....` , for example.  
+
+```
+hyperfine 'LD_PRELOAD=\path\to\libvcuda.so ./vectorAdd'
+```
+
+By default, Hyperfine will perform at least 10 benchmarking runs. To change this, you can use the *-m/--min-runs* option.
 
 
 # supported CUDA runtime API 
