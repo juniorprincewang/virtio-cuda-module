@@ -29,7 +29,7 @@ __global__ void kernel(float *g_data, float value)
 {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     g_data[idx] = g_data[idx] + value;
-    printf("%f+g_data[%d]=%f\n", value, idx, g_data[idx]);
+	printf("%f+g_data[%d]=%f\n", value, idx, g_data[idx]);
 }
 
 int checkResult(float *data, const int n, const float x)
@@ -69,7 +69,7 @@ int main()
 	float *d_a=0;
 	float *h_a=0;
 	dim3 block, grid;
-	int num = 1 << 4;
+	int num = 1 << 22;
     int nbytes = num * sizeof(float);
     int value=16;
 	//test();
@@ -90,6 +90,8 @@ int main()
 	printf("Device %d: \"%s\" with Compute %d.%d capability\n",devID, props.name, props.major, props.minor);
 	// return 0;
 */
+
+    printf("sending 0x%x\n", nbytes);
 
 	h_a=(float*)malloc(nbytes);
 	memset(h_a, 0, nbytes);

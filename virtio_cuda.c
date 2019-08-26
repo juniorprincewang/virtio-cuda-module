@@ -1208,8 +1208,10 @@ static unsigned long *find_gpa_array_start_addr(uint64_t addr, size_t size,
 	size_t blocks=0;
 	int i=0;
 	struct virtio_uvm_page *page = find_page_by_addr(addr, port);
-	if(!page)
+	if(!page) {
+		pr_err("No such addr 0x%llx\n", addr);
 		return NULL;
+	}
 	offset = addr - page->uvm_start;
 	*offset_ret = offset;
 	start_block = offset/port->block_size;
@@ -1224,8 +1226,9 @@ static unsigned long *find_gpa_array_start_addr(uint64_t addr, size_t size,
 	size -= len;
 	while(size>0) {
 		gpa_array[i+1] = virt_to_phys((void*)page->page[start_block+1+i]);
-		len = size < port->block_size? size: port->block_size;
+		len = size < port->block_size ? size : port->block_size;
 		size -= len;
+		i++;
 	}
 	return gpa_array;
 }
@@ -2450,11 +2453,14 @@ static int port_fops_mmap(struct file *filp, struct vm_area_struct *vma)
 	pages->block_num = block_num;
 	pages->uvm_start = vma->vm_start;
 	pages->uvm_end = vma->vm_end;
+	gldebug("block_num is %d\n", block_num);
 	pages->page = kmalloc(sizeof(unsigned long)*block_num, GFP_KERNEL);
 	for(i =0; i< block_num; i++) {
 		unsigned long pg = __get_free_pages(GFP_KERNEL, order);
-		if(!pg)
+		if(!pg) {
+			pr_err("get free pages failed\n");
 			return -ENOMEM;
+		}
 		pages->page[i] = pg;
 	}
 	for(i=0; i<block_num; i++) 
