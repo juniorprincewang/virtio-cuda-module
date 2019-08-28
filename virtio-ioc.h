@@ -1,7 +1,7 @@
 #ifndef VIRTCR_IOC_H
 #define VIRTCR_IOC_H
 
-#define VIRTIO_CUDA_DEBUG
+// #define VIRTIO_CUDA_DEBUG
 #define KMALLOC_SHIFT 22 // 4MB
 #define KMALLOC_SIZE (1UL<<KMALLOC_SHIFT)
 
@@ -57,6 +57,7 @@
 #define VIRTIO_CUDA_SETDEVICEFLAGS 31
 #define VIRTIO_CUDA_MEMGETINFO 32
 #define VIRTIO_CUDA_MALLOCHOST 33
+#define VIRTIO_CUDA_FREEHOST 34
 
 
 struct GPUDevice {
@@ -83,8 +84,6 @@ struct GPUDevice {
 #define RSA_PKCS1_OAEP_PADDING	4
 
 #endif
-
-
 /*
  * function arguments
 */
@@ -98,6 +97,7 @@ typedef struct VirtIOArg
 	uint32_t dstSize;
 	uint64_t flag;
 	uint64_t param;
+	uint64_t param2;
 } VirtIOArg;
 /* see ioctl-number in https://github.com/torvalds/
 	linux/blob/master/Documentation/ioctl/ioctl-number.txt
@@ -181,6 +181,7 @@ typedef struct VirtIOArg
 
 #define VIRTIO_IOC_MALLOCHOST \
 	_IOWR(VIRTIO_IOC_ID,33,VirtIOArg)
-
+#define VIRTIO_IOC_FREEHOST \
+	_IOWR(VIRTIO_IOC_ID,34,VirtIOArg)
 
 #endif

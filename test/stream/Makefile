@@ -10,7 +10,7 @@ CFLAGS	= -L /usr/local/vcuda/lib64/
 all:
 #	nvcc step2.cu --cudart=shared -o run
 #	LD_PRELOAD=../../lib/libcudart.so ./run
-	$(NVCC) $(CFLAGS) $(LIBS) -o $(TARGET) multi_stream.cu 
+	$(NVCC) $(CFLAGS) $(LIBS) -o $(TARGET) stream.cu 
 
 clean:
 	rm -f ./run

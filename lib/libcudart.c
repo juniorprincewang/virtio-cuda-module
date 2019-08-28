@@ -582,8 +582,8 @@ cudaError_t cudaMalloc(void **devPtr, size_t size)
 
 cudaError_t cudaHostRegister(void *ptr, size_t size, unsigned int flags)
 {
+	VirtIOArg arg;
 	func();
-	/*
 	memset(&arg, 0, sizeof(VirtIOArg));
 	arg.cmd = VIRTIO_CUDA_HOSTREGISTER;
 	arg.tid = syscall(SYS_gettid);
@@ -592,14 +592,13 @@ cudaError_t cudaHostRegister(void *ptr, size_t size, unsigned int flags)
 	arg.flag = flags;
 	send_to_device(VIRTIO_IOC_HOSTREGISTER, &arg);
 	return (cudaError_t)arg.cmd;
-	*/
-	return cudaSuccess;
 }
 
 cudaError_t cudaHostUnregister(void *ptr)
 {
 	VirtIOArg arg;
 	func();
+
 	memset(&arg, 0, sizeof(VirtIOArg));
 	arg.cmd = VIRTIO_CUDA_HOSTUNREGISTER;
 	arg.tid = syscall(SYS_gettid);
@@ -623,15 +622,24 @@ cudaError_t cudaMallocHost(void **ptr, size_t size)
 
 cudaError_t cudaFreeHost(void *ptr)
 {
-	BlockHeader* blk = get_block_by_ptr(ptr);
+	BlockHeader* blk = NULL;
+    VirtIOArg arg;
 	func();
+	memset(&arg, 0, sizeof(VirtIOArg));
+	arg.cmd = VIRTIO_CUDA_FREEHOST;
+	arg.tid = syscall(SYS_gettid);
+	arg.src = (uint64_t)ptr;
+	arg.srcSize = 0;
+	send_to_device(VIRTIO_IOC_FREEHOST, &arg);
+	blk = get_block_by_ptr(ptr);
     if(!blk) {
 		return;
     }
     munmap(blk->address, blk->total_size);
+	return (cudaError_t)arg.cmd;
 }
 
-cudaError_t cudaFree (void *devPtr)
+cudaError_t cudaFree(void *devPtr)
 {
 	VirtIOArg arg;
 	func();
@@ -859,17 +867,17 @@ cudaError_t cudaMemGetInfo(size_t *free, size_t *total)
 }
 
 
-// cudaError_t cudaSetDeviceFlags(unsigned int flags)
-// {
-// 	VirtIOArg arg;
-// 	func();
-// 	memset(&arg, 0, sizeof(VirtIOArg));
-// 	arg.cmd = VIRTIO_CUDA_SETDEVICEFLAGS;
-// 	arg.tid = syscall(SYS_gettid);
-// 	arg.flag = flags;
-// 	send_to_device(VIRTIO_IOC_SETDEVICEFLAGS, &arg);
-// 	return (cudaError_t)arg.cmd;
-// }
+cudaError_t cudaSetDeviceFlags(unsigned int flags)
+{
+	VirtIOArg arg;
+	func();
+	memset(&arg, 0, sizeof(VirtIOArg));
+	arg.cmd = VIRTIO_CUDA_SETDEVICEFLAGS;
+	arg.tid = syscall(SYS_gettid);
+	arg.flag = (uint64_t)flags;
+	send_to_device(VIRTIO_IOC_SETDEVICEFLAGS, &arg);
+	return (cudaError_t)arg.cmd;
+}
 
 const char *cudaGetErrorString(cudaError_t error)
 {

@@ -32,6 +32,8 @@ int main()
 	int nstreams = 5;
 	int i;
 	int nreps = 10000;
+    int num = 1 << 22;
+    int nbytes = num * sizeof(float);
 	// create CUDA event handles
     // use blocking sync
     cudaEvent_t start_event, stop_event;
