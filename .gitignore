@@ -18,3 +18,6 @@ NVIDIA_CUDA-9.1_Samples/0_Simple/simpleStreams/simpleStreams
 NVIDIA_CUDA-9.1_Samples/6_Advanced/alignedTypes/run.sh
 NVIDIA_CUDA-9.1_Samples/6_Advanced/alignedTypes/alignedTypes
 NVIDIA_CUDA-9.1_Samples/bin/
+NVIDIA_CUDA-9.1_Samples/0_Simple/matrixMul/matrixMul
+NVIDIA_CUDA-9.1_Samples/1_Utilities/bandwidthTest/bandwidthTest
+NVIDIA_CUDA-9.1_Samples/6_Advanced/sortingNetworks/sortingNetworks

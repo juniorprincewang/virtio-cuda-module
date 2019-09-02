@@ -64,6 +64,8 @@ typedef struct block_header
     size_t magic;
 } BlockHeader;
 
+void __attribute__ ((constructor)) my_init(void);
+void __attribute__ ((destructor)) my_fini(void);
 
 BlockHeader* get_block_by_ptr(void* p)
 {
@@ -205,6 +207,18 @@ void close_vdevice()
 	debug("closing fd\n");
 }
 
+
+void my_init(void) {
+	debug("Init dynamic library.\n");
+	if(open_vdevice() < 0)
+		exit(-1);
+}
+
+void my_fini(void) {
+	debug("deinit dynamic library\n");
+	close_vdevice();
+}
+
 void** __cudaRegisterFatBinary(void *fatCubin)
 {
 	VirtIOArg arg;
@@ -213,9 +227,6 @@ void** __cudaRegisterFatBinary(void *fatCubin)
 
 	func();
 	
-	if(open_vdevice() < 0)
-		exit(-1);
-
 	fatCubinHandle = (unsigned long long**)malloc(sizeof(unsigned long long*));
 	magic = *(unsigned int*)fatCubin;
 	if (magic == FATBINC_MAGIC)
@@ -263,7 +274,6 @@ void __cudaUnregisterFatBinary(void **fatCubinHandle)
 	arg.cmd = VIRTIO_CUDA_UNREGISTERFATBINARY;
 	arg.tid = syscall(SYS_gettid);
 	send_to_device(VIRTIO_IOC_UNREGISTERFATBINARY, &arg);
-	close_vdevice();
 	if (fatCubinHandle != NULL)
 		free(fatCubinHandle);
 }
@@ -623,20 +633,14 @@ cudaError_t cudaMallocHost(void **ptr, size_t size)
 cudaError_t cudaFreeHost(void *ptr)
 {
 	BlockHeader* blk = NULL;
-    VirtIOArg arg;
 	func();
-	memset(&arg, 0, sizeof(VirtIOArg));
-	arg.cmd = VIRTIO_CUDA_FREEHOST;
-	arg.tid = syscall(SYS_gettid);
-	arg.src = (uint64_t)ptr;
-	arg.srcSize = 0;
-	send_to_device(VIRTIO_IOC_FREEHOST, &arg);
+	cudaError_t err = cudaHostUnregister(ptr);
 	blk = get_block_by_ptr(ptr);
     if(!blk) {
-		return;
+		return cudaErrorInitializationError;
     }
     munmap(blk->address, blk->total_size);
-	return (cudaError_t)arg.cmd;
+	return err;
 }
 
 cudaError_t cudaFree(void *devPtr)

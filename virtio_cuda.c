@@ -1819,7 +1819,7 @@ int cuda_memcpy_async(VirtIOArg __user *arg, struct port *port)
 			return -ENOMEM;
 		} else {
 			payload->param = (uint64_t)blocks<<32|(uint64_t)offset;
-			payload->src = (uint64_t)virt_to_phys(phys_addr_pack);
+			payload->param2 = (uint64_t)virt_to_phys(phys_addr_pack);
 		}
 
 		ret = send_to_virtio(port, (void *)payload, arg_len);
