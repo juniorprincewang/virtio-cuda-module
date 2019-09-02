@@ -2,7 +2,6 @@ virtio_cuda.o.ur-safe
 test/*/run
 lib/libcudart.so
 NVIDIA_CUDA-9.1_Samples/4_Finance/MonteCarloMultiGPU/MonteCarloMultiGPU
-NVIDIA_CUDA-9.1_Samples/4_Finance/MonteCarloMultiGPU/run.sh
 NVIDIA_CUDA-9.1_Samples/bin/x86_64/linux/release/deviceQuery
 NVIDIA_CUDA-9.1_Samples/bin/x86_64/linux/release/MonteCarloMultiGPU
 NVIDIA_CUDA-9.1_Samples/bin/x86_64/linux/release/alignedTypes
@@ -10,12 +9,8 @@ NVIDIA_CUDA-9.1_Samples/bin/x86_64/linux/release/vectorAdd
 NVIDIA_CUDA-9.1_Samples/bin/x86_64/linux/release/simpleStreams
 NVIDIA_CUDA-9.1_Samples/1_Utilities/deviceQuery/deviceQuery
 NVIDIA_CUDA-9.1_Samples/1_Utilities/deviceQuery/device
-NVIDIA_CUDA-9.1_Samples/1_Utilities/deviceQuery/build_run.sh
-NVIDIA_CUDA-9.1_Samples/0_Simple/vectorAdd/run.sh
 NVIDIA_CUDA-9.1_Samples/0_Simple/vectorAdd/vectorAdd
-NVIDIA_CUDA-9.1_Samples/0_Simple/simpleStreams/run.sh
 NVIDIA_CUDA-9.1_Samples/0_Simple/simpleStreams/simpleStreams
-NVIDIA_CUDA-9.1_Samples/6_Advanced/alignedTypes/run.sh
 NVIDIA_CUDA-9.1_Samples/6_Advanced/alignedTypes/alignedTypes
 NVIDIA_CUDA-9.1_Samples/bin/
 NVIDIA_CUDA-9.1_Samples/0_Simple/matrixMul/matrixMul
