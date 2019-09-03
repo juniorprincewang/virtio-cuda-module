@@ -294,7 +294,7 @@ int main(int argc, char **argv)
     printf("Testing misaligned types...\n");
     printf("uint8...\n");
     nTotalFailures += runTest<uint8>(1, MemorySize);
-    /*
+    
     printf("uint16...\n");
     nTotalFailures += runTest<uint16>(2, MemorySize);
 
@@ -328,7 +328,7 @@ int main(int argc, char **argv)
 
     printf("RGBA32_2...\n");
     nTotalFailures += runTest<RGBA32_2>(32, MemorySize);
-    */
+    
     printf("\n[alignedTypes] -> Test Results: %d Failures\n", nTotalFailures);
 
     printf("Shutting down...\n");

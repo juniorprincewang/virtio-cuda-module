@@ -16,3 +16,4 @@ NVIDIA_CUDA-9.1_Samples/bin/
 NVIDIA_CUDA-9.1_Samples/0_Simple/matrixMul/matrixMul
 NVIDIA_CUDA-9.1_Samples/1_Utilities/bandwidthTest/bandwidthTest
 NVIDIA_CUDA-9.1_Samples/6_Advanced/sortingNetworks/sortingNetworks
+NVIDIA_CUDA-9.1_Samples/4_Finance/binomialOptions/binomialOptions
