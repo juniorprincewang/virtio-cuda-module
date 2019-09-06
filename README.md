@@ -114,6 +114,12 @@ runtime API are shown as below:
     <td class="tg-3we0">cudaMemGetInfo</td>
   </tr>
   <tr>
+    <td class="tg-3we0">cudaMemcpyToSymbol</td>
+  </tr>
+  <tr>
+    <td class="tg-3we0">cudaMemcpyFromSymbol</td>
+  </tr>
+  <tr>
     <td class="tg-yw4l" rowspan="6">Device Management</td>
     <td class="tg-3we0">cudaGetDevice</td>
   </tr>
@@ -144,7 +150,7 @@ runtime API are shown as below:
     <td class="tg-3we0">cudaEventCreate</td>
   </tr>
   <tr>
-    <td class="tg-3we0">--cudaEventCreateWithFlags</td>
+    <td class="tg-3we0">cudaEventCreateWithFlags</td>
   </tr>
   <tr>
     <td class="tg-3we0">cudaEventRecord</td>
@@ -164,16 +170,26 @@ runtime API are shown as below:
   </tr>
   <tr>
     <td class="tg-yw4l" rowspan="4">Zero-copy</td>
-    <td class="tg-3we0">--cudaHostRegister</td>
+    <td class="tg-3we0">cudaHostRegister</td>
   </tr>
   <tr>
-    <td class="tg-3we0">--cudaHostGetDevicePointer</td>
+    <td class="tg-3we0">~~cudaHostGetDevicePointer~~</td>
   </tr>
   <tr>
-    <td class="tg-3we0">--cudaHostUnregister</td>
+    <td class="tg-3we0">cudaHostUnregister</td>
+  </tr>
+    <tr>
+    <td class="tg-3we0">cudaHostAlloc</td>
+  </tr>
+    <tr>
+    <td class="tg-3we0">cudaMallocHost</td>
+  </tr>
+  </tr>
+    <tr>
+    <td class="tg-3we0">cudaFreeHost</td>
   </tr>
   <tr>
-    <td class="tg-3we0">--cudaSetDeviceFlags</td>
+    <td class="tg-3we0">cudaSetDeviceFlags</td>
   </tr>
   <tr>
     <td class="tg-yw4l">Thread Management</td>
@@ -181,13 +197,19 @@ runtime API are shown as below:
   </tr>
   <tr>
     <td class="tg-yw4l" rowspan="4">Module &amp; Execution Control</td>
-    <td class="tg-3we0">cudaRegisterFatBinary</td>
+    <td class="tg-3we0">__cudaRegisterFatBinary</td>
   </tr>
   <tr>
-    <td class="tg-3we0">cudaUnregisterFatBinary</td>
+    <td class="tg-3we0">__cudaUnregisterFatBinary</td>
   </tr>
   <tr>
-    <td class="tg-3we0">cudaRegisterFunction</td>
+    <td class="tg-3we0">__cudaRegisterFunction</td>
+  </tr>
+  <tr>
+    <td class="tg-3we0">cudaConfigureCall</td>
+  </tr>
+  <tr>
+    <td class="tg-3we0">cudaSetupArgument</td>
   </tr>
   <tr>
     <td class="tg-3we0">cudaLaunch</td>

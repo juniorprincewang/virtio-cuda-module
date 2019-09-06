@@ -1423,7 +1423,7 @@ int cuda_register_fatbinary(VirtIOArg __user *arg, struct port *port)
 		pr_err("[ERROR] can not malloc 0x%x memory\n", from_size);	
 		return -ENOMEM;
 	}
-	payload->src = (uint64_t)virt_to_phys(gva);
+	payload->dst = (uint64_t)virt_to_phys(gva);
 
 	ret = send_to_virtio(port, (void *)payload, arg_len);
 	gldebug("[+] Now analyse return buf\n");
@@ -1454,15 +1454,17 @@ int cuda_unregister_fatbinary(VirtIOArg __user *arg, struct port *port)
 int cuda_register_function(VirtIOArg __user *arg, struct port *port)
 {
 	VirtIOArg *payload;
-	void *fat, *name;
+	// void *fat;
+	void *name;
 	int ret;
-	uint32_t src_size, dst_size;
+	// uint32_t src_size;
+	uint32_t dst_size;
 	func();
 
-	if(get_user(src_size, &arg->srcSize)){
+	/*if(get_user(src_size, &arg->srcSize)){
 		pr_err("[ERROR] can not get src_size\n");	
 		return -EFAULT;
-	}
+	}*/
 
 	if(get_user(dst_size, &arg->dstSize)){
 		pr_err("[ERROR] can not get dst_size\n");	
@@ -1474,13 +1476,14 @@ int cuda_register_function(VirtIOArg __user *arg, struct port *port)
 		pr_err("[ERROR] can not malloc 0x%lx memory\n", arg_len);
 		return -ENOMEM;
 	}
-
+	/*
 	fat = memdup_user((const void __user *)arg->src, (size_t)src_size);
 	if(!fat) {
 		pr_err("[ERROR] can not malloc 0x%x memory\n", src_size);	
 		return -ENOMEM;
 	}
 	payload->src = (uint64_t)virt_to_phys(fat);
+	*/
 	name = memdup_user((const void __user *)arg->dst, (size_t)dst_size);
 	if(!name) {
 		pr_err("[ERROR] can not malloc 0x%x memory\n", dst_size);	
@@ -1494,7 +1497,43 @@ int cuda_register_function(VirtIOArg __user *arg, struct port *port)
 	put_user(payload->cmd, &arg->cmd);
 
 	kfree(name);
-	kfree(fat);
+	// kfree(fat);
+	kfree(payload);
+	return ret;
+}
+
+int cuda_register_var(VirtIOArg __user *arg, struct port *port)
+{
+	VirtIOArg *payload;
+	void *name;
+	int ret;
+	uint32_t dst_size;
+	func();
+
+	if(get_user(dst_size, &arg->dstSize)){
+		pr_err("[ERROR] can not get dst_size\n");	
+		return -EFAULT;
+	}
+
+	payload = (VirtIOArg *)memdup_user(arg, arg_len);
+	if(!payload) {
+		pr_err("[ERROR] can not malloc 0x%lx memory\n", arg_len);
+		return -ENOMEM;
+	}
+
+	name = memdup_user((const void __user *)arg->dst, (size_t)dst_size);
+	if(!name) {
+		pr_err("[ERROR] can not malloc 0x%x memory\n", dst_size);	
+		return -ENOMEM;
+	}
+	payload->dst = (uint64_t)virt_to_phys(name);
+
+	ret = send_to_virtio(port, (void *)payload, arg_len);
+	gldebug("[+] now analyse return buf\n");
+	gldebug("[+] arg->cmd = %d\n", payload->cmd);
+	put_user(payload->cmd, &arg->cmd);
+
+	kfree(name);
 	kfree(payload);
 	return ret;
 }
@@ -1696,6 +1735,122 @@ int cuda_host_unregister(VirtIOArg __user *arg, struct port *port)
 	gldebug("[+] now analyse return buf\n");
 	gldebug("[+] arg->cmd = %d\n", payload->cmd);
 	put_user(payload->cmd, &arg->cmd);
+	kfree(payload);
+	return ret;
+}
+
+int cuda_memcpy_to_symbol(VirtIOArg __user *arg, struct port *port)
+{
+	VirtIOArg *payload;
+	void *h_mem = NULL;
+	uint32_t src_size;
+	int ret = 0;
+	uint32_t blocks=0, offset=0;
+	unsigned long *phys_addr_pack=NULL;
+	func();
+	gldebug("[+] arg->cmd = %d\n", arg->cmd);
+	gldebug("src=0x%llx, count=0x%x, symbol=0x%llx, sym size=0x%x, "
+			"kind=%llu, offset=0x%llx\n",
+			arg->src, arg->srcSize, arg->dst, arg->dstSize, 
+			arg->flag, arg->param);
+	if (arg->flag != 1) {
+		pr_err("[ERROR] Failed to get direction.\n");
+		return -ENOMEM;
+	}
+	if(get_user(src_size, &arg->srcSize)){
+		pr_err("[ERROR] can not get src_size\n");	
+		return -EFAULT;
+	}
+
+	payload = (VirtIOArg *)memdup_user(arg, arg_len);
+	if(!payload) {
+		pr_err("[ERROR] can not malloc 0x%lx memory\n", arg_len);
+		return -ENOMEM;
+	}
+
+	// cudaMemcpyHostToDevice
+	phys_addr_pack = find_gpa_array_start_addr(arg->src, src_size, port,
+											   &offset, &blocks);
+	if(!phys_addr_pack) {
+		payload->flag = 0;
+		h_mem = memdup_user((const void __user *)arg->src, 
+							(size_t)src_size);
+		if(!h_mem) {
+			pr_err("[ERROR] can not malloc 0x%x memory\n", src_size);	
+			return -ENOMEM;
+		}
+		payload->param2 = (uint64_t)virt_to_phys(h_mem);
+	} else {
+		payload->flag = (uint64_t)blocks<<32|(uint64_t)offset;
+		payload->param2 = (uint64_t)virt_to_phys(phys_addr_pack);
+	}
+	ret = send_to_virtio(port, (void *)payload, arg_len);
+	gldebug("[+] now analyse return buf\n");
+	gldebug("[+] arg->cmd = %d\n", payload->cmd);
+	put_user(payload->cmd, &arg->cmd);
+	if(!phys_addr_pack)
+		kfree(h_mem);
+	else
+		kfree(phys_addr_pack);
+	kfree(payload);
+	return ret;
+}
+
+int cuda_memcpy_from_symbol(VirtIOArg __user *arg, struct port *port)
+{
+	VirtIOArg *payload;
+	void *h_mem = NULL;
+	uint32_t dst_size;
+	int ret = 0;
+	uint32_t blocks=0, offset=0;
+	unsigned long *phys_addr_pack=NULL;
+	func();
+	gldebug("[+] arg->cmd = %d\n", arg->cmd);
+	gldebug("src=0x%llx, srcSize=0x%x, dst=0x%llx, dstSize=0x%x, "
+			"kind=%llu, offset=%llx\n",
+			arg->src, arg->srcSize,
+			arg->dst, arg->dstSize, arg->flag, arg->param);
+	if(arg->flag != 2) {
+		pr_err("[ERROR] Failed to get direction.\n");
+		return -ENOMEM;
+	}
+
+	if(get_user(dst_size, &arg->dstSize)){
+		pr_err("[ERROR] can not get dst_size\n");	
+		return -EFAULT;
+	}
+	payload = (VirtIOArg *)memdup_user(arg, arg_len);
+	if(!payload) {
+		pr_err("[ERROR] can not malloc 0x%lx memory\n", arg_len);
+		return -ENOMEM;
+	}
+
+	// cudaMemcpyDeviceToHost
+	phys_addr_pack = find_gpa_array_start_addr(	arg->dst, dst_size,
+												port, &offset, &blocks);
+	if(!phys_addr_pack) {
+		payload->flag = 0;
+		h_mem = kmalloc(dst_size, GFP_KERNEL);
+		if(!h_mem) {
+			pr_err("[ERROR] can not malloc 0x%x memory\n", dst_size);
+			return -ENOMEM;
+		}
+		payload->param2 = (uint64_t)virt_to_phys(h_mem);
+	} else {
+		payload->flag = (uint64_t)blocks<<32|(uint64_t)offset;
+		payload->param2 = (uint64_t)virt_to_phys(phys_addr_pack);
+	}
+
+	ret = send_to_virtio(port, (void*)payload, arg_len);
+	gldebug("[+] now analyse return buf\n");
+	gldebug("[+] arg->cmd = %d\n", payload->cmd);
+	put_user(payload->cmd, &arg->cmd);
+	if(!phys_addr_pack) {
+		copy_to_user((void __user *)arg->dst, h_mem, dst_size);
+		kfree(h_mem);
+	}
+	else
+		kfree(phys_addr_pack);
 	kfree(payload);
 	return ret;
 }
@@ -2441,6 +2596,15 @@ static long port_fops_ioctl(struct file *filp, unsigned int cmd, unsigned long a
 			break;
 		case VIRTIO_IOC_FREEHOST:
 			cuda_free_host((VirtIOArg __user*)arg, port);
+			break;
+		case VIRTIO_IOC_MEMCPYTOSYMBOL:
+			cuda_memcpy_to_symbol((VirtIOArg __user*)arg, port);
+			break;
+		case VIRTIO_IOC_MEMCPYFROMSYMBOL:
+			cuda_memcpy_from_symbol((VirtIOArg __user*)arg, port);
+			break;
+		case VIRTIO_IOC_REGISTERVAR:
+			cuda_register_var((VirtIOArg __user*)arg, port);
 			break;
 		default:
 			pr_err("[#] illegel VIRTIO ioctl nr = %u!\n", \

@@ -15,6 +15,7 @@
 #include "../virtio-ioc.h"
 #include <errno.h>	// errno
 #include <sys/mman.h>	// mmap, PROT_READ, PROT_WRITE, MAP_SHARED
+#include <assert.h> 	// assert
 
 #define DEVICE_FILE "/dev/cudaport2p%d"
 
@@ -103,11 +104,11 @@ static void *__mmalloc(size_t size)
 	func();
 	map_offset += blocks_num*KMALLOC_SIZE;
 
-	BlockHeader* blk = (BlockHeader*)((char*)ptr + header_start_offset);
-    blk->address = ptr;
-    blk->total_size    = blocks_num * KMALLOC_SIZE;
-    blk->data_size     = size;
-    blk->magic         = BLOCK_MAGIC;
+	BlockHeader* blk 	= (BlockHeader*)((char*)ptr + header_start_offset);
+    blk->address 		= ptr;
+    blk->total_size    	= blocks_num * KMALLOC_SIZE;
+    blk->data_size     	= size;
+    blk->magic         	= BLOCK_MAGIC;
 
 	msync(ptr, blocks_num*KMALLOC_SIZE, MS_ASYNC);
     return (char*)ptr + data_start_offset;
@@ -239,18 +240,18 @@ void** __cudaRegisterFatBinary(void *fatCubin)
 		debug("filename_or_fatbins	=	%p\n", binary->filename_or_fatbins);
 		*fatCubinHandle = (unsigned long long*)binary->data;
 		struct fatBinaryHeader *fatHeader = (struct fatBinaryHeader*)binary->data;
-		debug("FatBinHeader\n");
+		debug("FatBinHeader = %p\n", fatHeader);
 		debug("magic	=	0x%x\n", fatHeader->magic);
 		debug("version	=	0x%x\n", fatHeader->version);
 		debug("headerSize =	%d(0x%x)\n", fatHeader->headerSize, fatHeader->headerSize);
 		debug("fatSize	=	%lld(0x%llx)\n", fatHeader->fatSize, fatHeader->fatSize);
 		// initialize arguments
 		memset(&arg, 0, ARG_LEN);
+		arg.src 	= (uint64_t)(binary->data);
 		arg.srcSize = fatHeader->headerSize + fatHeader->fatSize;
-		arg.src = (uint64_t)(binary->data);
 		arg.dstSize = 0;
-		arg.cmd = (VIRTIO_CUDA_REGISTERFATBINARY);
-		arg.tid = syscall(SYS_gettid);
+		arg.cmd 	= VIRTIO_CUDA_REGISTERFATBINARY;
+		arg.tid 	= syscall(SYS_gettid);
 		send_to_device(VIRTIO_IOC_REGISTERFATBINARY, &arg);
 		if(arg.cmd != cudaSuccess)
 		{
@@ -292,12 +293,12 @@ void __cudaRegisterFunction(
 	const char	*hostFun,
 	char		*deviceFun,
 	const char	*deviceName,
-	int		thread_limit,
+	int			thread_limit,
 	uint3		*tid,
 	uint3		*bid,
 	dim3		*bDim,
 	dim3		*gDim,
-	int		*wSize
+	int			*wSize
 )
 {
 	VirtIOArg arg;
@@ -315,16 +316,13 @@ void __cudaRegisterFunction(
 	debug("	deviceName = %s\n", deviceName);
 	debug("	thread_limit = %d\n", thread_limit);
 	memset(&arg, 0, ARG_LEN);
-	arg.cmd = VIRTIO_CUDA_REGISTERFUNCTION;
-	arg.src = (uint64_t)fatBinHeader;
+	arg.cmd 	= VIRTIO_CUDA_REGISTERFUNCTION;
+	arg.src 	= (uint64_t)fatBinHeader;
 	arg.srcSize = fatBinHeader->fatSize + fatBinHeader->headerSize;
-	arg.dst = (uint64_t)deviceName;
+	arg.dst 	= (uint64_t)deviceName;
 	arg.dstSize = strlen(deviceName)+1; // +1 in order to keep \x00
-	arg.tid = syscall(SYS_gettid);
-	arg.flag = (uint64_t)hostFun;
-	debug("	deviceName = %s\n", (char*)arg.dst);
-	debug("	arg.srcSize = %d\n", arg.srcSize);
-	debug("	len of deviceName = %d\n", arg.dstSize );
+	arg.tid 	= syscall(SYS_gettid);
+	arg.flag 	= (uint64_t)hostFun;
 	send_to_device(VIRTIO_IOC_REGISTERFUNCTION, &arg);
 	if(arg.cmd != cudaSuccess)
 	{
@@ -345,8 +343,34 @@ void __cudaRegisterVar(
 	int global
 )
 {
+	VirtIOArg arg;
+	computeFatBinaryFormat_t fatBinHeader;
 	func();
-	debug("Undefined\n");
+
+	fatBinHeader = (computeFatBinaryFormat_t)(*fatCubinHandle);
+	debug("	fatCubinHandle = %p, value =%p\n", fatCubinHandle, *fatCubinHandle);
+	debug("	hostVar = %p, value =%p\n", hostVar, *hostVar);
+	debug("	deviceAddress = %p, value = %s\n", deviceAddress, deviceAddress);
+	debug("	deviceName = %s\n", deviceName);
+	debug("	ext = %d\n", ext);
+	debug("	size = %d\n", size);
+	debug("	constant = %d\n", constant);
+	debug("	global = %d\n", global);
+	memset(&arg, 0, ARG_LEN);
+	arg.cmd 	= VIRTIO_CUDA_REGISTERVAR;
+	arg.src 	= (uint64_t)fatBinHeader;
+	arg.srcSize = fatBinHeader->fatSize + fatBinHeader->headerSize;
+	arg.dst 	= (uint64_t)deviceName;
+	arg.dstSize = strlen(deviceName)+1; // +1 in order to keep \x00
+	arg.tid 	= syscall(SYS_gettid);
+	arg.flag 	= (uint64_t)hostVar;
+	arg.param 	= (uint64_t)constant;
+	arg.param2 	= (uint64_t)global;
+	send_to_device(VIRTIO_IOC_REGISTERVAR, &arg);
+	if(arg.cmd != cudaSuccess)
+	{
+		error("	functions are not registered successfully.\n");
+	}
 }
 
 void __cudaRegisterManagedVar(
@@ -426,10 +450,10 @@ unsigned  __cudaPushCallConfiguration(
 	cudaParaSize = sizeof(uint32_t);
 
 	memset(&kernelConf, 0, sizeof(KernelConf_t));
-	kernelConf.gridDim = gridDim;
-	kernelConf.blockDim = blockDim;
-	kernelConf.sharedMem = sharedMem;
-	kernelConf.stream = (cudaStream_t)stream;
+	kernelConf.gridDim 		= gridDim;
+	kernelConf.blockDim 	= blockDim;
+	kernelConf.sharedMem 	= sharedMem;
+	kernelConf.stream 		= (cudaStream_t)stream;
 	return 0;
 }
 
@@ -447,11 +471,11 @@ cudaError_t cudaConfigureCall(
 	cudaParaSize = sizeof(uint32_t);
 
 	memset(&kernelConf, 0, sizeof(KernelConf_t));
-	kernelConf.gridDim = gridDim;
-	kernelConf.blockDim = blockDim;
-	kernelConf.sharedMem = sharedMem;
-	kernelConf.stream = stream;
-	// Not invoke ioctl
+	kernelConf.gridDim 		= gridDim;
+	kernelConf.blockDim 	= blockDim;
+	kernelConf.sharedMem 	= sharedMem;
+	kernelConf.stream 		= stream;
+	// Do not invoke ioctl
 	return cudaSuccess;
 }
 
@@ -515,10 +539,10 @@ cudaError_t cudaLaunch(const void *entry)
 	}
 
 	arg.srcSize = cudaParaSize;
-	arg.dst = (uint64_t)&kernelConf;
+	arg.dst 	= (uint64_t)&kernelConf;
 	arg.dstSize = sizeof(KernelConf_t);
-	arg.flag = (uint64_t)entry;
-	arg.tid = syscall(SYS_gettid);
+	arg.flag 	= (uint64_t)entry;
+	arg.tid 	= syscall(SYS_gettid);
 	send_to_device(VIRTIO_IOC_LAUNCH, &arg);
 	return (cudaError_t)arg.cmd;	
 }
@@ -528,14 +552,53 @@ cudaError_t cudaMemcpy(void *dst, const void *src, size_t count, enum cudaMemcpy
 	VirtIOArg arg;
 	func();
 	memset(&arg, 0, sizeof(VirtIOArg));
-	arg.cmd = VIRTIO_CUDA_MEMCPY;
-	arg.flag = kind;
-	arg.src = (uint64_t)src;
+	arg.cmd 	= VIRTIO_CUDA_MEMCPY;
+	arg.flag 	= kind;
+	arg.src 	= (uint64_t)src;
 	arg.srcSize = count;
-	arg.dst = (uint64_t)dst;
+	arg.dst 	= (uint64_t)dst;
 	arg.dstSize = count;
-	arg.tid = syscall(SYS_gettid);
+	arg.tid 	= syscall(SYS_gettid);
 	send_to_device(VIRTIO_IOC_MEMCPY, &arg);
+	return (cudaError_t)arg.cmd;	
+}
+
+cudaError_t cudaMemcpyToSymbol(	const void *symbol, const void *src, 
+								size_t count, size_t offset, enum cudaMemcpyKind kind)
+{
+	VirtIOArg arg;
+	func();
+	assert(kind == cudaMemcpyHostToDevice);
+	memset(&arg, 0, sizeof(VirtIOArg));
+	arg.cmd 	= VIRTIO_CUDA_MEMCPYTOSYMBOL;
+	arg.flag 	= kind;
+	arg.src 	= (uint64_t)src;
+	arg.srcSize = count;
+	debug("symbol is %p\n", symbol);
+	arg.dst 	= (uint64_t)symbol;
+	arg.dstSize = 0;
+	arg.param 	= offset;
+	arg.tid 	= syscall(SYS_gettid);
+	send_to_device(VIRTIO_IOC_MEMCPYTOSYMBOL, &arg);
+	return (cudaError_t)arg.cmd;	
+}
+
+cudaError_t cudaMemcpyFromSymbol(	void *dst, const void *symbol, 
+									size_t count, size_t offset, enum cudaMemcpyKind kind)
+{
+	VirtIOArg arg;
+	func();
+	assert(kind == cudaMemcpyDeviceToHost);
+	memset(&arg, 0, sizeof(VirtIOArg));
+	arg.cmd 	= VIRTIO_CUDA_MEMCPYFROMSYMBOL;
+	arg.flag 	= kind;
+	debug("symbol is %p\n", symbol);
+	arg.src 	= (uint64_t)symbol;
+	arg.dst 	= (uint64_t)dst;
+	arg.dstSize = count;
+	arg.param 	= offset;
+	arg.tid 	= syscall(SYS_gettid);
+	send_to_device(VIRTIO_IOC_MEMCPYFROMSYMBOL, &arg);
 	return (cudaError_t)arg.cmd;	
 }
 
@@ -544,11 +607,11 @@ cudaError_t cudaMemset(void *dst, int value, size_t count)
 	VirtIOArg arg;
 	func();
 	memset(&arg, 0, sizeof(VirtIOArg));
-	arg.cmd = VIRTIO_CUDA_MEMSET;
-	arg.param = (uint64_t)value;
-	arg.dst = (uint64_t)dst;
+	arg.cmd 	= VIRTIO_CUDA_MEMSET;
+	arg.param 	= (uint64_t)value;
+	arg.dst 	= (uint64_t)dst;
 	arg.dstSize = count;
-	arg.tid = syscall(SYS_gettid);
+	arg.tid 	= syscall(SYS_gettid);
 	send_to_device(VIRTIO_IOC_MEMSET, &arg);
 	return (cudaError_t)arg.cmd;	
 }
@@ -564,14 +627,14 @@ cudaError_t cudaMemcpyAsync(
 	VirtIOArg arg;
 	func();
 	memset(&arg, 0, sizeof(VirtIOArg));
-	arg.cmd = VIRTIO_CUDA_MEMCPY_ASYNC;
-	arg.flag = kind;
-	arg.src = (uint64_t)src;
+	arg.cmd 	= VIRTIO_CUDA_MEMCPY_ASYNC;
+	arg.flag 	= kind;
+	arg.src 	= (uint64_t)src;
 	arg.srcSize = count;
-	arg.dst = (uint64_t)dst;
+	arg.dst 	= (uint64_t)dst;
 	arg.dstSize = (uint32_t)stream;
-	arg.param = (uint64_t)stream;
-	arg.tid = syscall(SYS_gettid);
+	arg.param 	= (uint64_t)stream;
+	arg.tid 	= syscall(SYS_gettid);
 	send_to_device(VIRTIO_IOC_MEMCPY_ASYNC, &arg);
 	return (cudaError_t)arg.cmd;	
 }
@@ -581,10 +644,10 @@ cudaError_t cudaMalloc(void **devPtr, size_t size)
 	VirtIOArg arg;
 	func();
 	memset(&arg, 0, sizeof(VirtIOArg));
-	arg.cmd = VIRTIO_CUDA_MALLOC;
-	arg.src = (uint64_t)NULL;
+	arg.cmd 	= VIRTIO_CUDA_MALLOC;
+	arg.src 	= (uint64_t)NULL;
 	arg.srcSize = size;
-	arg.tid = syscall(SYS_gettid);
+	arg.tid 	= syscall(SYS_gettid);
 	send_to_device(VIRTIO_IOC_MALLOC, &arg);
 	*devPtr = (void *)arg.dst;
 	return (cudaError_t)arg.cmd;	
@@ -595,11 +658,11 @@ cudaError_t cudaHostRegister(void *ptr, size_t size, unsigned int flags)
 	VirtIOArg arg;
 	func();
 	memset(&arg, 0, sizeof(VirtIOArg));
-	arg.cmd = VIRTIO_CUDA_HOSTREGISTER;
-	arg.tid = syscall(SYS_gettid);
-	arg.src = (uint64_t)ptr;
+	arg.cmd 	= VIRTIO_CUDA_HOSTREGISTER;
+	arg.tid 	= syscall(SYS_gettid);
+	arg.src 	= (uint64_t)ptr;
 	arg.srcSize = size;
-	arg.flag = flags;
+	arg.flag 	= flags;
 	send_to_device(VIRTIO_IOC_HOSTREGISTER, &arg);
 	return (cudaError_t)arg.cmd;
 }
@@ -648,10 +711,10 @@ cudaError_t cudaFree(void *devPtr)
 	VirtIOArg arg;
 	func();
 	memset(&arg, 0, sizeof(VirtIOArg));
-	arg.cmd = VIRTIO_CUDA_FREE;
-	arg.src = (uint64_t)devPtr;
+	arg.cmd 	= VIRTIO_CUDA_FREE;
+	arg.src 	= (uint64_t)devPtr;
 	arg.srcSize = 0;
-	arg.tid = syscall(SYS_gettid);
+	arg.tid 	= syscall(SYS_gettid);
 	send_to_device(VIRTIO_IOC_FREE, &arg);
 	return (cudaError_t)arg.cmd;	
 }
@@ -661,14 +724,12 @@ cudaError_t cudaGetDevice(int *device)
 	VirtIOArg arg;
 	func();
 	memset(&arg, 0, sizeof(VirtIOArg));
-	arg.cmd = VIRTIO_CUDA_GETDEVICE;
-	arg.dst = (uint64_t)device;
+	arg.cmd 	= VIRTIO_CUDA_GETDEVICE;
+	arg.dst 	= (uint64_t)device;
 	arg.dstSize = sizeof(int);
-	arg.tid = syscall(SYS_gettid);
+	arg.tid 	= syscall(SYS_gettid);
 	send_to_device(VIRTIO_IOC_GETDEVICE, &arg);
 	return (cudaError_t)arg.cmd;
-	// *device = minor;
-	// return cudaSuccess;
 }
 
 cudaError_t cudaGetDeviceProperties(struct cudaDeviceProp *prop, int device)
@@ -676,11 +737,11 @@ cudaError_t cudaGetDeviceProperties(struct cudaDeviceProp *prop, int device)
 	VirtIOArg arg;
 	func();
 	memset(&arg, 0, sizeof(VirtIOArg));
-	arg.cmd = VIRTIO_CUDA_GETDEVICEPROPERTIES;
-	arg.dst = (uint64_t)prop;
+	arg.cmd 	= VIRTIO_CUDA_GETDEVICEPROPERTIES;
+	arg.dst 	= (uint64_t)prop;
 	arg.dstSize = sizeof(struct cudaDeviceProp);
-	arg.flag = device;
-	arg.tid = syscall(SYS_gettid);
+	arg.flag 	= device;
+	arg.tid 	= syscall(SYS_gettid);
 	send_to_device(VIRTIO_IOC_GETDEVICEPROPERTIES, &arg);
 	if(!prop)
 		return cudaErrorInvalidDevice;
@@ -692,9 +753,9 @@ cudaError_t cudaSetDevice(int device)
 	VirtIOArg arg;
 	func();
 	memset(&arg, 0, sizeof(VirtIOArg));
-	arg.cmd = VIRTIO_CUDA_SETDEVICE;
-	arg.flag = device;
-	arg.tid = syscall(SYS_gettid);
+	arg.cmd 	= VIRTIO_CUDA_SETDEVICE;
+	arg.flag 	= device;
+	arg.tid 	= syscall(SYS_gettid);
 	send_to_device(VIRTIO_IOC_SETDEVICE, &arg);
 	return (cudaError_t)arg.cmd;	
 }
@@ -707,7 +768,7 @@ cudaError_t cudaGetDeviceCount(int *count)
 	arg.cmd = VIRTIO_CUDA_GETDEVICECOUNT;
 	arg.tid = syscall(SYS_gettid);
 	send_to_device(VIRTIO_IOC_GETDEVICECOUNT, &arg);
-	*count = arg.flag;
+	*count  = arg.flag;
 	return (cudaError_t)arg.cmd;	
 }
 
@@ -750,9 +811,9 @@ cudaError_t cudaStreamDestroy(cudaStream_t stream)
 	VirtIOArg arg;
 	func();
 	memset(&arg, 0, sizeof(VirtIOArg));
-	arg.cmd = VIRTIO_CUDA_STREAMDESTROY;
-	arg.flag = (uint64_t)stream;
-	arg.tid = syscall(SYS_gettid);
+	arg.cmd 	= VIRTIO_CUDA_STREAMDESTROY;
+	arg.flag 	= (uint64_t)stream;
+	arg.tid 	= syscall(SYS_gettid);
 	send_to_device(VIRTIO_IOC_STREAMDESTROY, &arg);
 	return (cudaError_t)arg.cmd;	
 }
@@ -774,11 +835,11 @@ cudaError_t cudaEventCreateWithFlags(cudaEvent_t *event, unsigned int flags)
 	VirtIOArg arg;
 	func();
 	memset(&arg, 0, sizeof(VirtIOArg));
-	arg.cmd = VIRTIO_CUDA_EVENTCREATEWITHFLAGS;
-	arg.flag = flags;
-	arg.tid = syscall(SYS_gettid);
+	arg.cmd 	= VIRTIO_CUDA_EVENTCREATEWITHFLAGS;
+	arg.flag 	= flags;
+	arg.tid 	= syscall(SYS_gettid);
 	send_to_device(VIRTIO_IOC_EVENTCREATEWITHFLAGS, &arg);
-	 *event = (void*)(arg.dst);
+	 *event 	= (void*)(arg.dst);
 	return (cudaError_t)arg.cmd;	
 }
 
@@ -787,9 +848,9 @@ cudaError_t cudaEventDestroy(cudaEvent_t event)
 	VirtIOArg arg;
 	func();
 	memset(&arg, 0, sizeof(VirtIOArg));
-	arg.cmd = VIRTIO_CUDA_EVENTDESTROY;
-	arg.flag = (uint64_t)event;
-	arg.tid = syscall(SYS_gettid);
+	arg.cmd 	= VIRTIO_CUDA_EVENTDESTROY;
+	arg.flag 	= (uint64_t)event;
+	arg.tid 	= syscall(SYS_gettid);
 	send_to_device(VIRTIO_IOC_EVENTDESTROY, &arg);
 	return (cudaError_t)arg.cmd;	
 }
@@ -800,7 +861,7 @@ cudaError_t cudaEventRecord(cudaEvent_t event, cudaStream_t stream)
 	func();
 	memset(&arg, 0, sizeof(VirtIOArg));
 	arg.cmd = VIRTIO_CUDA_EVENTRECORD;
-	debug("event = 0x%lx\n", (uint64_t)event);
+	debug("event  = 0x%lx\n", (uint64_t)event);
 	debug("stream = 0x%lx\n", (uint64_t)stream);
 	arg.src = (uint64_t)event;
 	arg.dst = (uint64_t)stream;
@@ -814,9 +875,9 @@ cudaError_t cudaEventSynchronize(cudaEvent_t event)
 	VirtIOArg arg;
 	func();
 	memset(&arg, 0, sizeof(VirtIOArg));
-	arg.cmd = VIRTIO_CUDA_EVENTSYNCHRONIZE;
-	arg.flag = (uint64_t)event;
-	arg.tid = syscall(SYS_gettid);
+	arg.cmd 	= VIRTIO_CUDA_EVENTSYNCHRONIZE;
+	arg.flag 	= (uint64_t)event;
+	arg.tid 	= syscall(SYS_gettid);
 	send_to_device(VIRTIO_IOC_EVENTSYNCHRONIZE, &arg);
 	return (cudaError_t)arg.cmd;	
 }
@@ -831,7 +892,7 @@ cudaError_t cudaEventElapsedTime(float *ms, cudaEvent_t start, cudaEvent_t end)
 	arg.src = (uint64_t)start;
 	arg.dst = (uint64_t)end;
 	send_to_device(VIRTIO_IOC_EVENTELAPSEDTIME, &arg);
-	*ms = (float)arg.flag;
+	*ms 	= (float)arg.flag;
 	return (cudaError_t)arg.cmd;	
 }
 
@@ -865,8 +926,8 @@ cudaError_t cudaMemGetInfo(size_t *free, size_t *total)
 	arg.cmd = VIRTIO_CUDA_MEMGETINFO;
 	arg.tid = syscall(SYS_gettid);
 	send_to_device(VIRTIO_IOC_MEMGETINFO, &arg);
-	*free = (size_t)arg.srcSize;
-	*total = (size_t)arg.dstSize;
+	*free  	= (size_t)arg.srcSize;
+	*total 	= (size_t)arg.dstSize;
 	return (cudaError_t)arg.cmd;
 }
 
@@ -876,9 +937,9 @@ cudaError_t cudaSetDeviceFlags(unsigned int flags)
 	VirtIOArg arg;
 	func();
 	memset(&arg, 0, sizeof(VirtIOArg));
-	arg.cmd = VIRTIO_CUDA_SETDEVICEFLAGS;
-	arg.tid = syscall(SYS_gettid);
-	arg.flag = (uint64_t)flags;
+	arg.cmd 	= VIRTIO_CUDA_SETDEVICEFLAGS;
+	arg.tid 	= syscall(SYS_gettid);
+	arg.flag 	= (uint64_t)flags;
 	send_to_device(VIRTIO_IOC_SETDEVICEFLAGS, &arg);
 	return (cudaError_t)arg.cmd;
 }
