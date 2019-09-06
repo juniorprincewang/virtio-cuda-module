@@ -95,7 +95,7 @@ runtime API are shown as below:
     <th class="tg-yw4l">supported CUDA runtime API</th>
   </tr>
   <tr>
-    <td class="tg-yw4l" rowspan="6">Memory Management</td>
+    <td class="tg-yw4l" rowspan="8">Memory Management</td>
     <td class="tg-3we0">cudaMalloc</td>
   </tr>
   <tr>
@@ -169,7 +169,7 @@ runtime API are shown as below:
     <td class="tg-3we0">cudaGetLastError</td>
   </tr>
   <tr>
-    <td class="tg-yw4l" rowspan="4">Zero-copy</td>
+    <td class="tg-yw4l" rowspan="7">Zero-copy</td>
     <td class="tg-3we0">cudaHostRegister</td>
   </tr>
   <tr>
