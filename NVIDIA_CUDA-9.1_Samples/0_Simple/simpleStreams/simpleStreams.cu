@@ -366,6 +366,7 @@ int main(int argc, char **argv)
     checkCudaErrors(cudaEventElapsedTime(&elapsed_time, start_event, stop_event));
     printf("non-streamed:\t%.2f\n", elapsed_time / nreps);
 
+    
 
     //////////////////////////////////////////////////////////////////////
     // time execution with nstreams streams
@@ -414,6 +415,8 @@ int main(int argc, char **argv)
 
     checkCudaErrors(cudaFree(d_a));
     checkCudaErrors(cudaFree(d_c));
+
+    checkCudaErrors(cudaDeviceReset());
 
     return bResults ? EXIT_SUCCESS : EXIT_FAILURE;
 }

@@ -494,7 +494,7 @@ cudaError_t cudaSetupArgument(const void* arg, size_t size, size_t offset)
 	cudaParaSize += sizeof(uint32_t);
 	
 	memcpy(&cudaKernelPara[cudaParaSize], arg, size);
-	debug("value = %llx\n", *(unsigned long long*)&cudaKernelPara[cudaParaSize]);
+	debug("value = 0x%llx\n", *(unsigned long long*)&cudaKernelPara[cudaParaSize]);
 	cudaParaSize += size;
 	(*((uint32_t*)cudaKernelPara))++;
 	return cudaSuccess;
@@ -534,7 +534,10 @@ cudaError_t cudaLaunch(const void *entry)
 	for(int i=0; i<para_num; i++) {
 		debug("i=%d\n", i);
 		debug("size = %u\n", *(uint32_t*)&para[para_idx]);
-		debug("value=%llx\n",*(unsigned long long*)&para[para_idx+sizeof(uint32_t)]);
+		if (*(uint32_t*)&para[para_idx]==8)
+			debug("value=%llx\n",*(unsigned long long*)&para[para_idx+sizeof(uint32_t)]);
+		else
+			debug("value=%llx\n",*(unsigned int*)&para[para_idx+sizeof(uint32_t)]);
 		para_idx += *(uint32_t*)&para[para_idx] + sizeof(uint32_t);
 	}
 

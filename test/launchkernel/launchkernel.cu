@@ -29,7 +29,7 @@ __global__ void kernel(float *g_data, float value)
 {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     g_data[idx] = g_data[idx] + value;
-	printf("%f+g_data[%d]=%f\n", value, idx, g_data[idx]);
+	// printf("%f+g_data[%d]=%f\n", value, idx, g_data[idx]);
 }
 
 int checkResult(float *data, const int n, const float x)
@@ -97,6 +97,7 @@ int main()
 	memset(h_a, 0, nbytes);
 	// h_a[0] = 1;
 	// start
+	CHECK(cudaSetDevice(0));
 	CHECK(cudaMalloc((void**)&d_a, nbytes));
 	CHECK(cudaMemset(d_a, 0, nbytes));
 	
@@ -109,7 +110,7 @@ int main()
 	kernel<<<grid, block>>>(d_a, value);
 	CHECK(cudaMemcpy(h_a, d_a, nbytes, cudaMemcpyDeviceToHost));
  	bool bFinalResults = (bool) checkResult(h_a, num, value);
-	printf("result:%d\n", bFinalResults);
+	printf("result:%s\n", bFinalResults? "PASS" : "FAILED");
 	// end
 	free(h_a);
 	CHECK(cudaFree(d_a));

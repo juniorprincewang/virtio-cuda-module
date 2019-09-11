@@ -196,7 +196,7 @@ runtime API are shown as below:
     <td class="tg-3we0">cudaThreadSynchronize</td>
   </tr>
   <tr>
-    <td class="tg-yw4l" rowspan="4">Module &amp; Execution Control</td>
+    <td class="tg-yw4l" rowspan="7">Module &amp; Execution Control</td>
     <td class="tg-3we0">__cudaRegisterFatBinary</td>
   </tr>
   <tr>
@@ -204,6 +204,9 @@ runtime API are shown as below:
   </tr>
   <tr>
     <td class="tg-3we0">__cudaRegisterFunction</td>
+  </tr>
+  <tr>
+    <td class="tg-3we0">__cudaRegisterVar</td>
   </tr>
   <tr>
     <td class="tg-3we0">cudaConfigureCall</td>
