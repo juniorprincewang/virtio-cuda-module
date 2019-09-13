@@ -2264,6 +2264,26 @@ int cuda_stream_destroy(VirtIOArg __user *arg, struct port *port)
 	return ret;
 }
 
+int cuda_stream_synchronize(VirtIOArg __user *arg, struct port *port)
+{
+	VirtIOArg *payload;
+	int ret;
+	func();
+
+	payload = (VirtIOArg *)memdup_user(arg, arg_len);
+	if(!payload) {
+		pr_err("[ERROR] can not malloc 0x%lx memory\n", arg_len);
+		return -ENOMEM;
+	}
+
+	ret = send_to_virtio(port, (void*)payload, arg_len);
+	gldebug("[+] now analyse return buf\n");
+	gldebug("[+] arg->cmd = %d\n", payload->cmd);
+	put_user(payload->cmd, &arg->cmd);
+	kfree(payload);
+	return ret;
+}
+
 int cuda_stream_wait_event(VirtIOArg __user *arg, struct port *port)
 {
 	VirtIOArg *payload;
@@ -2345,6 +2365,7 @@ int cuda_event_destroy(VirtIOArg __user *arg, struct port *port)
 	kfree(payload);
 	return ret;
 }
+
 
 int cuda_thread_synchronize(VirtIOArg __user *arg, struct port *port)
 {
@@ -2628,6 +2649,9 @@ static long port_fops_ioctl(struct file *filp, unsigned int cmd, unsigned long a
 			break;
 		case VIRTIO_IOC_STREAMWAITEVENT:
 			cuda_stream_wait_event((VirtIOArg __user*)arg, port);
+			break;
+		case VIRTIO_IOC_STREAMSYNCHRONIZE:
+			cuda_stream_synchronize((VirtIOArg __user*)arg, port);
 			break;
 		default:
 			pr_err("[#] illegel VIRTIO ioctl nr = %u!\n", \

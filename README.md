@@ -120,7 +120,7 @@ runtime API are shown as below:
     <td class="tg-3we0">cudaMemcpyFromSymbol</td>
   </tr>
   <tr>
-    <td class="tg-yw4l" rowspan="6">Device Management</td>
+    <td class="tg-yw4l" rowspan="7">Device Management</td>
     <td class="tg-3we0">cudaGetDevice</td>
   </tr>
   <tr>
@@ -128,6 +128,9 @@ runtime API are shown as below:
   </tr>
   <tr>
     <td class="tg-3we0">cudaSetDevice</td>
+  </tr>
+  <tr>
+    <td class="tg-3we0">cudaSetDeviceFlags</td>
   </tr>
   <tr>
     <td class="tg-3we0">cudaGetDeviceProperties</td>
@@ -139,11 +142,14 @@ runtime API are shown as below:
     <td class="tg-3we0">cudaDeviceReset</td>
   </tr>
   <tr>
-    <td class="tg-yw4l" rowspan="2">Stream Management</td>
+    <td class="tg-yw4l" rowspan="3">Stream Management</td>
     <td class="tg-3we0">cudaStreamCreate</td>
   </tr>
   <tr>
     <td class="tg-3we0">cudaStreamDestroy</td>
+  </tr>
+  <tr>
+    <td class="tg-3we0">cudaStreamSynchronize</td>
   </tr>
   <tr>
     <td class="tg-yw4l" rowspan="6">Event Management</td>

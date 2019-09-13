@@ -150,8 +150,15 @@ endif
 HOST_COMPILER ?= g++
 NVCC          := $(CUDA_PATH)/bin/nvcc -ccbin $(HOST_COMPILER)
 
+CUDA_DIR = /usr/local/cuda
+VCUDA_DIR = /usr/local/vcuda
+CUDA_LIB_DIR := $(CUDA_DIR)/lib64
+ifeq ($(shell if test -d $(VCUDA_DIR); then echo T; else echo F; fi), T)
+    CUDA_LIB_DIR := $(VCUDA_DIR)/lib64
+endif
+
 # internal flags
-NVCCFLAGS   := -m${TARGET_SIZE} --cudart=shared
+NVCCFLAGS   := -m${TARGET_SIZE} --cudart=shared -L$(CUDA_LIB_DIR)
 CCFLAGS     :=
 LDFLAGS     :=
 

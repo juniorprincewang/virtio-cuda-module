@@ -821,6 +821,18 @@ cudaError_t cudaStreamDestroy(cudaStream_t stream)
 	return (cudaError_t)arg.cmd;	
 }
 
+cudaError_t cudaStreamSynchronize(cudaStream_t stream)
+{
+	VirtIOArg arg;
+	func();
+	memset(&arg, 0, sizeof(VirtIOArg));
+	arg.cmd 	= VIRTIO_CUDA_STREAMSYNCHRONIZE;
+	arg.flag 	= (uint64_t)stream;
+	arg.tid 	= syscall(SYS_gettid);
+	send_to_device(VIRTIO_IOC_STREAMSYNCHRONIZE, &arg);
+	return (cudaError_t)arg.cmd;	
+}
+
 cudaError_t cudaStreamWaitEvent(cudaStream_t stream,
 								cudaEvent_t event, unsigned int flags)
 {
