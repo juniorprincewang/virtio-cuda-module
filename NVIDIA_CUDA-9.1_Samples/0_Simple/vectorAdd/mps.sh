@@ -1,0 +1,2 @@
+./vectorAdd &
+./vectorAdd

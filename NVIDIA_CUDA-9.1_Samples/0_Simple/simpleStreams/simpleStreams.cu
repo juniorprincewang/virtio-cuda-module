@@ -70,6 +70,7 @@ const char *sDeviceSyncMethod[] =
 #define ALIGN_UP(x,size) ( ((size_t)x+(size-1))&(~(size-1)) )
 
 __global__ void init_array(int *g_data, int *factor, int num_iterations)
+
 {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
 
@@ -77,6 +78,8 @@ __global__ void init_array(int *g_data, int *factor, int num_iterations)
     {
         g_data[idx] += *factor;    // non-coalesced on purpose, to burn time
     }
+    if (idx == 0)
+        printf("idx[%d] = %d\n", idx, g_data[idx]);
 }
 
 bool correct_data(int *a, const int n, const int c)
@@ -184,8 +187,10 @@ void printHelp()
 int main(int argc, char **argv)
 {
     int cuda_device = 0;
-    int nstreams = 4;               // number of streams for CUDA calls
-    int nreps = 10;                 // number of times each experiment is repeated
+    // int nstreams = 4;               // number of streams for CUDA calls
+    int nstreams = 2;               // number of streams for CUDA calls
+    int nreps = 1;                 // number of times each experiment is repeated
+    // int nreps = 10;                 // number of times each experiment is repeated
     int n = 16 * 1024 * 1024;       // number of ints in the data set
     int nbytes = n * sizeof(int);   // number of data bytes
     dim3 threads, blocks;           // kernel launch configuration
@@ -330,7 +335,7 @@ int main(int argc, char **argv)
 
     checkCudaErrors(cudaEventCreateWithFlags(&start_event, eventflags));
     checkCudaErrors(cudaEventCreateWithFlags(&stop_event, eventflags));
-
+/*
     // time memcopy from device
     checkCudaErrors(cudaEventRecord(start_event, 0));     // record in stream-0, to ensure that all previous CUDA calls have completed
     checkCudaErrors(cudaMemcpyAsync(hAligned_a, d_a, nbytes, cudaMemcpyDeviceToHost, streams[0]));
@@ -364,7 +369,7 @@ int main(int argc, char **argv)
     checkCudaErrors(cudaEventRecord(stop_event, 0));
     checkCudaErrors(cudaEventSynchronize(stop_event));
     checkCudaErrors(cudaEventElapsedTime(&elapsed_time, start_event, stop_event));
-    printf("non-streamed:\t%.2f\n", elapsed_time / nreps);
+    printf("non-streamed:\t%.2f\n", elapsed_time / nreps);*/
 
     
 
@@ -375,7 +380,11 @@ int main(int argc, char **argv)
     memset(hAligned_a, 255, nbytes);     // set host memory bits to all 1s, for testing correctness
     checkCudaErrors(cudaMemset(d_a, 0, nbytes)); // set device memory to all 0s, for testing correctness
     checkCudaErrors(cudaEventRecord(start_event, 0));
-
+    
+    printf("n=0x%x\n", n);
+    printf("niterations=%d\n", niterations);
+    printf("nbytes=0x%x\n", nbytes);
+    
     for (int k = 0; k < nreps; k++)
     {
         // asynchronously launch nstreams kernels, each operating on its own portion of data

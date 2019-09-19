@@ -91,13 +91,14 @@ int main()
 	// return 0;
 */
 
+	printf("num 0x%x\n", num);
     printf("sending 0x%x\n", nbytes);
 
 	h_a=(float*)malloc(nbytes);
 	memset(h_a, 0, nbytes);
 	// h_a[0] = 1;
 	// start
-	CHECK(cudaSetDevice(0));
+	/*CHECK(cudaSetDevice(0));
 	CHECK(cudaMalloc((void**)&d_a, nbytes));
 	CHECK(cudaMemset(d_a, 0, nbytes));
 	
@@ -112,8 +113,8 @@ int main()
  	bool bFinalResults = (bool) checkResult(h_a, num, value);
 	printf("result:%s\n", bFinalResults? "PASS" : "FAILED");
 	// end
+	CHECK(cudaFree(d_a));*/
 	free(h_a);
-	CHECK(cudaFree(d_a));
 
 	/* test case 3
 	* add 	cudaMalloc
