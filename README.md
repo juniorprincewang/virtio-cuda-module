@@ -81,7 +81,7 @@ To run a benchmark, you can simply call `hyperfine <command>....` , for example.
 hyperfine 'LD_PRELOAD=\path\to\libvcuda.so ./vectorAdd'
 ```
 
-By default, Hyperfine will perform at least 10 benchmarking runs. To change this, you can use the *-m/--min-runs* option.
+By default, Hyperfine will perform at least 10 benchmarking runs. To change this, you can use the *-m/--min-runs* option or *-M/--max-runs*.
 
 
 # supported CUDA runtime API 

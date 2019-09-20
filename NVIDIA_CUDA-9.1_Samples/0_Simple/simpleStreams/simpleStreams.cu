@@ -63,7 +63,7 @@ const char *sDeviceSyncMethod[] =
 #ifndef WIN32
 #include <sys/mman.h> // for mmap() / munmap()
 #endif
-
+#include <sys/time.h>
 
 // Macro to aligned up to the memory size in question
 #define MEMORY_ALIGNMENT  4096
@@ -78,8 +78,8 @@ __global__ void init_array(int *g_data, int *factor, int num_iterations)
     {
         g_data[idx] += *factor;    // non-coalesced on purpose, to burn time
     }
-    if (idx == 0)
-        printf("idx[%d] = %d\n", idx, g_data[idx]);
+    // if (idx == 0)
+    //     printf("idx[%d] = %d\n", idx, g_data[idx]);
 }
 
 bool correct_data(int *a, const int n, const int c)
@@ -186,11 +186,11 @@ void printHelp()
 
 int main(int argc, char **argv)
 {
+    struct timeval start, end;
+    gettimeofday(&start, NULL);
     int cuda_device = 0;
-    // int nstreams = 4;               // number of streams for CUDA calls
-    int nstreams = 2;               // number of streams for CUDA calls
-    int nreps = 1;                 // number of times each experiment is repeated
-    // int nreps = 10;                 // number of times each experiment is repeated
+    int nstreams = 4;               // number of streams for CUDA calls
+    int nreps = 10;                 // number of times each experiment is repeated
     int n = 16 * 1024 * 1024;       // number of ints in the data set
     int nbytes = n * sizeof(int);   // number of data bytes
     dim3 threads, blocks;           // kernel launch configuration
@@ -335,7 +335,7 @@ int main(int argc, char **argv)
 
     checkCudaErrors(cudaEventCreateWithFlags(&start_event, eventflags));
     checkCudaErrors(cudaEventCreateWithFlags(&stop_event, eventflags));
-/*
+
     // time memcopy from device
     checkCudaErrors(cudaEventRecord(start_event, 0));     // record in stream-0, to ensure that all previous CUDA calls have completed
     checkCudaErrors(cudaMemcpyAsync(hAligned_a, d_a, nbytes, cudaMemcpyDeviceToHost, streams[0]));
@@ -369,7 +369,7 @@ int main(int argc, char **argv)
     checkCudaErrors(cudaEventRecord(stop_event, 0));
     checkCudaErrors(cudaEventSynchronize(stop_event));
     checkCudaErrors(cudaEventElapsedTime(&elapsed_time, start_event, stop_event));
-    printf("non-streamed:\t%.2f\n", elapsed_time / nreps);*/
+    printf("non-streamed:\t%.2f\n", elapsed_time / nreps);
 
     
 
@@ -426,6 +426,10 @@ int main(int argc, char **argv)
     checkCudaErrors(cudaFree(d_c));
 
     checkCudaErrors(cudaDeviceReset());
+    gettimeofday(&end, NULL);
+    double time_spent = (double)(end.tv_usec - start.tv_usec)/1000000 +
+                        (double)(end.tv_sec - start.tv_sec);
+    printf("time spent is %lf\n", time_spent);
 
     return bResults ? EXIT_SUCCESS : EXIT_FAILURE;
 }

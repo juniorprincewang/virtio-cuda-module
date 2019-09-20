@@ -65,8 +65,8 @@ typedef struct block_header
 	size_t magic;
 } BlockHeader;
 
-void __attribute__ ((constructor)) my_init(void);
-void __attribute__ ((destructor)) my_fini(void);
+__attribute__ ((constructor)) void my_init(void);
+__attribute__ ((destructor)) void my_fini(void);
 
 
 /*
@@ -568,12 +568,12 @@ cudaError_t cudaLaunch(const void *entry)
 	debug("para_num=%d\n", para_num);
 	for(int i=0; i<para_num; i++) {
 		debug("i=%d\n", i);
-		debug("size = %u\n", *((uint32_t*)&para+para_idx));
-		if (*((uint32_t*)&para+para_idx)==8)
-			debug("value=%llx\n",*((unsigned long long*)&para+para_idx+sizeof(uint32_t)));
+		debug("size = %u\n", *(uint32_t*)&para[para_idx]);
+		if (*(uint32_t*)&para[para_idx]==8)
+			debug("value=%llx\n",*(unsigned long long*)&para[para_idx+sizeof(uint32_t)]);
 		else
-			debug("value=%x\n",*((unsigned int*)&para+para_idx+sizeof(uint32_t)));
-		para_idx += *((uint32_t*)&para+para_idx) + sizeof(uint32_t);
+			debug("value=%llx\n",*(unsigned int*)&para[para_idx+sizeof(uint32_t)]);
+		para_idx += *(uint32_t*)&para[para_idx] + sizeof(uint32_t);
 	}
 
 	arg.srcSize = cudaParaSize;
@@ -708,17 +708,17 @@ cudaError_t cudaHostRegister(void *ptr, size_t size, unsigned int flags)
 cudaError_t cudaHostUnregister(void *ptr)
 {
 	VirtIOArg arg;
-	BlockHeader* blk = NULL;
+	// BlockHeader* blk = NULL;
 	func();
-	blk = get_block_by_ptr(ptr);
-    if(!blk) {
-		return cudaErrorInitializationError;
-    }
+	// blk = get_block_by_ptr(ptr);
+ //    if(!blk) {
+	// 	return cudaErrorInitializationError;
+ //    }
 	memset(&arg, 0, sizeof(VirtIOArg));
 	arg.cmd = VIRTIO_CUDA_HOSTUNREGISTER;
 	arg.tid = syscall(SYS_gettid);
 	arg.src = (uint64_t)ptr;
-	arg.srcSize = blk->data_size;
+	arg.srcSize = 0 ; //blk->data_size;
 	send_to_device(VIRTIO_IOC_HOSTUNREGISTER, &arg);
 	return (cudaError_t)arg.cmd;
 }

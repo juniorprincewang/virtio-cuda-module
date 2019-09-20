@@ -2002,6 +2002,7 @@ int cuda_memcpy(VirtIOArg __user *arg, struct port *port)
 				pr_err("[ERROR] can not malloc 0x%x memory\n", src_size);	
 				return -ENOMEM;
 			}
+			gldebug("kmalloc address %p\n", h_mem);
 			payload->param2 = (uint64_t)virt_to_phys(h_mem);
 		} else {
 			payload->param = blocks;
