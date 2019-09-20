@@ -59,10 +59,10 @@ static size_t const BLOCK_MAGIC = 0xdeadbeaf;
 
 typedef struct block_header
 {
-    void* address;
-    size_t total_size;
-    size_t data_size;
-    size_t magic;
+	void* address;
+	size_t total_size;
+	size_t data_size;
+	size_t magic;
 } BlockHeader;
 
 void __attribute__ ((constructor)) my_init(void);
@@ -81,21 +81,20 @@ void send_to_device(int cmd, VirtIOArg *arg)
 
 BlockHeader* get_block_by_ptr(void* p)
 {
-    void* ptr = (char*)p - sizeof(BlockHeader);
-    BlockHeader* blk = (BlockHeader*)ptr;
+	void* ptr = (char*)p - sizeof(BlockHeader);
+	BlockHeader* blk = (BlockHeader*)ptr;
 
-    if (blk->magic != BLOCK_MAGIC)
-    {
-        // error("bad magic in block %p\n", p);
-        return NULL;
-    }
-
-    return blk;
+	if (blk->magic != BLOCK_MAGIC)
+	{
+		debug("no magic 0x%lx\n", BLOCK_MAGIC);
+		return NULL;
+	}
+	return blk;
 }
 
 static size_t roundup(size_t n, size_t alignment)
 {
-    return (n+(alignment-1))/alignment * alignment;
+	return (n+(alignment-1))/alignment * alignment;
 }
 
 static void *__mmalloc(size_t size)
@@ -103,12 +102,11 @@ static void *__mmalloc(size_t size)
 	VirtIOArg arg;
 	void *src = NULL;
 	int alignment = 8;
-	int page_size = sysconf(_SC_PAGESIZE);
-	debug("page size = %d\n", page_size);
-    size_t data_start_offset = roundup(sizeof(BlockHeader), alignment);
-    size_t header_start_offset = data_start_offset - sizeof(BlockHeader);
-    size_t total_size = data_start_offset + size;
-    size_t total_round_size = roundup(total_size, page_size);
+	// int page_size = sysconf(_SC_PAGESIZE);
+	// debug("page size = %d\n", page_size);
+	size_t data_start_offset = roundup(sizeof(BlockHeader), alignment);
+	size_t header_start_offset = data_start_offset - sizeof(BlockHeader);
+	size_t total_size = data_start_offset + size;
 	size_t blocks_size = roundup(total_size, KMALLOC_SIZE);
 
 	void *ptr = mmap(0, blocks_size, PROT_READ|PROT_WRITE, 
@@ -119,23 +117,40 @@ static void *__mmalloc(size_t size)
 	}
 	func();
 	map_offset += blocks_size;
-
 	BlockHeader* blk 	= (BlockHeader*)((char*)ptr + header_start_offset);
-    blk->address 		= ptr;
-    blk->total_size    	= blocks_size;
-    blk->data_size     	= size;
-    blk->magic         	= BLOCK_MAGIC;
 
 	msync(ptr, blocks_size, MS_ASYNC);
-
-    src = (char*)ptr + data_start_offset;
+	src = (char*)ptr + data_start_offset;
+	debug("get ptr =%p, size=%lx\n", ptr, blocks_size);
+	debug("return src =%p\n", src);
 	memset(&arg, 0, ARG_LEN);
 	arg.cmd 	= VIRTIO_CUDA_MMAPCTL;
 	arg.src 	= (uint64_t)ptr;
 	arg.srcSize = blocks_size;
 	arg.tid 	= syscall(SYS_gettid);
 	send_to_device(VIRTIO_IOC_MMAPCTL, &arg);
-    return src;
+	blk->address 		= ptr;
+	blk->total_size    	= blocks_size;
+	blk->data_size     	= size;
+	blk->magic         	= BLOCK_MAGIC;
+	return src;
+}
+
+static void munmapctl(void *ptr)
+{
+	VirtIOArg arg;
+	BlockHeader* blk = NULL;
+	func();
+	blk = get_block_by_ptr(ptr);
+	if(!blk) {
+		return;
+	}
+	memset(&arg, 0, ARG_LEN);
+	arg.cmd 	= VIRTIO_CUDA_MUNMAPCTL;
+	arg.src 	= (uint64_t)blk->address;
+	arg.srcSize = blk->total_size;
+	arg.tid 	= syscall(SYS_gettid);
+	send_to_device(VIRTIO_IOC_MUNMAPCTL, &arg);
 }
 
 void *malloc(size_t size)
@@ -147,20 +162,19 @@ void *malloc(size_t size)
 
 void free(void *ptr)
 {
-	VirtIOArg arg;
+	BlockHeader* blk = NULL;
+	func();
 	if (ptr == NULL)
-        return;
-    BlockHeader* blk = get_block_by_ptr(ptr);
-    if(!blk) {
+		return;
+	blk = get_block_by_ptr(ptr);
+	if(!blk) {
 		__libc_free(ptr);
 		return;
-    }
-    memset(&arg, 0, ARG_LEN);
-	arg.cmd 	= VIRTIO_CUDA_MUNMAPCTL;
-	arg.src 	= (uint64_t)blk->address;
-	arg.srcSize = blk->total_size;
-	arg.tid 	= syscall(SYS_gettid);
-	send_to_device(VIRTIO_IOC_MUNMAPCTL, &arg);
+	}
+	debug("blk->address   =0x%lx\n",(uint64_t)blk->address);
+	debug("blk->total_size=0x%lx\n",(uint64_t)blk->total_size);
+	debug("magic 0x%lx\n", blk->magic);
+    munmapctl(ptr);
     munmap((void*)blk->address, blk->total_size);
 }
 
@@ -297,7 +311,7 @@ void __cudaUnregisterFatBinary(void **fatCubinHandle)
 	arg.tid = syscall(SYS_gettid);
 	send_to_device(VIRTIO_IOC_UNREGISTERFATBINARY, &arg);
 	if (fatCubinHandle != NULL)
-		free(fatCubinHandle);
+		__libc_free(fatCubinHandle);
 }
 
 void __cudaRegisterFatBinaryEnd(
@@ -530,12 +544,12 @@ cudaError_t cudaLaunchKernel(
 	cudaStream_t stream
 )
 {
-	uint32_t fid;
+	uint64_t fid;
 	func();
-	fid=(uint32_t)func;
-	debug("func id = %u\n", fid);
-	debug("szieof(args)=%lu\n", sizeof(args));
-	debug("szieof(args[0])=%lu\n", sizeof(args[0]));
+	fid=(uint64_t)func;
+	debug("func id = 0x%lx\n", fid);
+	debug("szieof(args)   =0x%lx\n", sizeof(args));
+	debug("szieof(args[0])=0x%lx\n", sizeof(args[0]));
 
 	return cudaSuccess;
 }
@@ -554,12 +568,12 @@ cudaError_t cudaLaunch(const void *entry)
 	debug("para_num=%d\n", para_num);
 	for(int i=0; i<para_num; i++) {
 		debug("i=%d\n", i);
-		debug("size = %u\n", *(uint32_t*)&para[para_idx]);
-		if (*(uint32_t*)&para[para_idx]==8)
-			debug("value=%llx\n",*(unsigned long long*)&para[para_idx+sizeof(uint32_t)]);
+		debug("size = %u\n", *((uint32_t*)&para+para_idx));
+		if (*((uint32_t*)&para+para_idx)==8)
+			debug("value=%llx\n",*((unsigned long long*)&para+para_idx+sizeof(uint32_t)));
 		else
-			debug("value=%llx\n",*(unsigned int*)&para[para_idx+sizeof(uint32_t)]);
-		para_idx += *(uint32_t*)&para[para_idx] + sizeof(uint32_t);
+			debug("value=%x\n",*((unsigned int*)&para+para_idx+sizeof(uint32_t)));
+		para_idx += *((uint32_t*)&para+para_idx) + sizeof(uint32_t);
 	}
 
 	arg.srcSize = cudaParaSize;

@@ -1215,9 +1215,9 @@ static unsigned long *find_gpa_array_start_addr(uint64_t addr, size_t size,
 	offset = addr - page->uvm_start;
 	*offset_ret = offset;
 	start_block = offset/port->block_size;
-	end_block = (offset + size)/port->block_size;
+	end_block = (offset + size-1)/port->block_size;
 	start_offset = offset%port->block_size;
-	blocks = end_block - start_block;
+	blocks = end_block - start_block+1;
 	*blocks_ret = blocks;
 	gpa_array = (unsigned long*)kmalloc(blocks*sizeof(uint64_t), GFP_KERNEL);
 	// gpa_array[0]=virt_to_phys((void*)(page->page[start_block] + start_offset));
@@ -1713,8 +1713,6 @@ int cuda_mmapctl(VirtIOArg __user *arg, struct port *port)
 	}
 	ret = send_to_virtio(port, (void *)payload, arg_len);
 	gldebug("[+] now analyse return buf\n");
-	gldebug("[+] arg->cmd = %d\n", payload->cmd);
-	put_user(payload->cmd, &arg->cmd);
 	kfree(phys_addr_pack);
 	kfree(payload);
 	return ret;
@@ -1742,6 +1740,7 @@ int cuda_munmapctl(VirtIOArg __user *arg, struct port *port)
 	phys_addr_pack = find_gpa_array_start_addr(arg->src, src_size, port,
 											   &payload->dstSize, &blocks);
 	if(!phys_addr_pack) {
+		payload->param = 0;
 		pr_err("[ERROR] Failed to find mmap address 0x%llx , "
 			   "size 0x%x memory\n", arg->src, src_size);
 		return -ENOMEM;
@@ -1752,8 +1751,6 @@ int cuda_munmapctl(VirtIOArg __user *arg, struct port *port)
 	}
 	ret = send_to_virtio(port, (void *)payload, arg_len);
 	gldebug("[+] now analyse return buf\n");
-	gldebug("[+] arg->cmd = %d\n", payload->cmd);
-	put_user(payload->cmd, &arg->cmd);
 	kfree(phys_addr_pack);
 	kfree(payload);
 	return ret;
@@ -1981,7 +1978,7 @@ int cuda_memcpy(VirtIOArg __user *arg, struct port *port)
 	unsigned long *phys_addr_pack=NULL;
 	func();
 	gldebug("[+] arg->cmd = %d\n", arg->cmd);
-	gldebug("src=0x%llx, srcSize=%d, dst=0x%llx, dstSize=%d, kind=%llu\n",
+	gldebug("src=0x%llx, srcSize=0x%x, dst=0x%llx, dstSize=0x%x, kind=%llu\n",
 			arg->src, arg->srcSize,
 			arg->dst, arg->dstSize, arg->flag);
 	if(get_user(src_size, &arg->srcSize)){
@@ -2005,10 +2002,10 @@ int cuda_memcpy(VirtIOArg __user *arg, struct port *port)
 				pr_err("[ERROR] can not malloc 0x%x memory\n", src_size);	
 				return -ENOMEM;
 			}
-			payload->src = (uint64_t)virt_to_phys(h_mem);
+			payload->param2 = (uint64_t)virt_to_phys(h_mem);
 		} else {
 			payload->param = blocks;
-			payload->src = (uint64_t)virt_to_phys(phys_addr_pack);
+			payload->param2 = (uint64_t)virt_to_phys(phys_addr_pack);
 		}
 		ret = send_to_virtio(port, (void *)payload, arg_len);
 		gldebug("[+] now analyse return buf\n");
@@ -2029,10 +2026,10 @@ int cuda_memcpy(VirtIOArg __user *arg, struct port *port)
 				pr_err("[ERROR] can not malloc 0x%x memory\n", src_size);
 				return -ENOMEM;
 			}
-			payload->dst = (uint64_t)virt_to_phys(h_mem);
+			payload->param2 = (uint64_t)virt_to_phys(h_mem);
 		} else {
 			payload->param = blocks;
-			payload->dst = (uint64_t)virt_to_phys(phys_addr_pack);
+			payload->param2 = (uint64_t)virt_to_phys(phys_addr_pack);
 		}
 
 		ret = send_to_virtio(port, (void*)payload, arg_len);
