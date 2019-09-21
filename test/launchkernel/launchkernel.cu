@@ -1,5 +1,6 @@
 #include <cuda.h>
 #include <stdio.h>
+#include <sys/time.h>
 
 #define CHECK(call) { \
 	cudaError_t err; \
@@ -55,6 +56,14 @@ void test()
 	printf("sizeof(uint32_t)=%lu\n", sizeof(uint32_t));
 }
 
+#define  TIMING
+
+static double tvsub(struct timeval start, struct timeval end)
+{
+	return (double)(end.tv_usec - start.tv_usec)/1000000 +
+                        (double)(end.tv_sec - start.tv_sec);
+}
+
 int main()
 {
 	/* test case 1
@@ -69,9 +78,17 @@ int main()
 	float *d_a=0;
 	float *h_a=0;
 	dim3 block, grid;
-	int num = 1 << 22;
+	int num = 1 << 24;
     int nbytes = num * sizeof(float);
     int value=41;
+    struct timeval malloc_start, malloc_end;
+    struct timeval free_start, free_end;
+    struct timeval d_malloc_start, d_malloc_end;
+    struct timeval d_free_start, d_free_end;
+    struct timeval HtoD_start, HtoD_end;
+    struct timeval DtoH_start, DtoH_end;
+    struct timeval kernel_start, kernel_end;
+    struct timeval total_start, total_end;
 	//test();
 	/* test case 2
 	* add 	cudaGetDeviceCount
@@ -92,30 +109,78 @@ int main()
 */
 
 	// printf("num 0x%x\n", num);
-    printf("sending 0x%x\n", nbytes);
+	#ifdef  TIMING
+		gettimeofday(&total_start, NULL);
+	#endif
 
+    printf("sending 0x%x\n", nbytes);
+	printf("allocating 0x%x\n", nbytes);
+    #ifdef  TIMING
+		gettimeofday(&malloc_start, NULL);
+	#endif
 	h_a=(float*)malloc(nbytes);
-	printf("h_a=%p\n", h_a);
+	#ifdef  TIMING
+		gettimeofday(&malloc_end, NULL);
+	#endif
 	memset(h_a, 0, nbytes);
+	printf("h_a=%p\n", h_a);
 	// h_a[0] = 1;
 	// start
 	CHECK(cudaSetDevice(0));
+	#ifdef  TIMING
+		gettimeofday(&d_malloc_start, NULL);
+	#endif
 	CHECK(cudaMalloc((void**)&d_a, nbytes));
+	#ifdef  TIMING
+		gettimeofday(&d_malloc_end, NULL);
+	#endif
 	CHECK(cudaMemset(d_a, 0, nbytes));
 	
 	// set kernel launch configuration
     block = dim3(4);
     grid  = dim3((num + block.x - 1) / block.x);
 
-	
+	#ifdef  TIMING
+		gettimeofday(&HtoD_start, NULL);
+	#endif
 	CHECK(cudaMemcpy(d_a, h_a, nbytes, cudaMemcpyHostToDevice));
+	#ifdef  TIMING
+		gettimeofday(&HtoD_end, NULL);
+	#endif
+	#ifdef  TIMING
+		gettimeofday(&kernel_start, NULL);
+	#endif
 	kernel<<<grid, block>>>(d_a, value);
+	#ifdef  TIMING
+		gettimeofday(&kernel_end, NULL);
+	#endif
+
+	#ifdef  TIMING
+		gettimeofday(&DtoH_start, NULL);
+	#endif
 	CHECK(cudaMemcpy(h_a, d_a, nbytes, cudaMemcpyDeviceToHost));
+	#ifdef  TIMING
+		gettimeofday(&DtoH_end, NULL);
+	#endif
+
  	bool bFinalResults = (bool) checkResult(h_a, num, value);
 	printf("result:%s\n", bFinalResults? "PASS" : "FAILED");
 	// end
+	#ifdef  TIMING
+		gettimeofday(&d_free_start, NULL);
+	#endif
 	CHECK(cudaFree(d_a));
+	#ifdef  TIMING
+		gettimeofday(&d_free_end, NULL);
+	#endif
+
+	#ifdef  TIMING
+		gettimeofday(&free_start, NULL);
+	#endif
 	free(h_a);
+	#ifdef  TIMING
+		gettimeofday(&free_end, NULL);
+	#endif
 
 	/* test case 3
 	* add 	cudaMalloc
@@ -124,6 +189,28 @@ int main()
 			cudaLaunch
 			cudaFree
 	*/
+	#ifdef  TIMING
+	gettimeofday(&total_end, NULL);
+	double total_time 	= tvsub(total_start, total_end);
+	double malloc_time 	= tvsub(malloc_start, malloc_end);
+	double free_time 	= tvsub(free_start, free_end);
+	double d_malloc_time 	= tvsub(d_malloc_start, d_malloc_end);
+	double d_free_time 	= tvsub(d_free_start, d_free_end);
+	double HtoD_time 	= tvsub(HtoD_start, HtoD_end);
+	double DtoH_time 	= tvsub(DtoH_start, DtoH_end);
+	double kernel_time 	= tvsub(kernel_start, kernel_end);
+
+	printf("================\n");
+	printf("total_time : \t%f\n", total_time);
+	printf("host malloc: \t%f\n", malloc_time);
+	printf("device malloc: \t%f\n", d_malloc_time);
+	printf("HtoD: \t\t%f\n", HtoD_time);
+	printf("Exec: \t\t%f\n", kernel_time);
+	printf("DtoH: \t\t%f\n", DtoH_time);
+	printf("device free: \t%f\n", d_free_time);
+	printf("host free: \t%f\n", free_time);
+	printf("================\n");
+	#endif
 
 	return EXIT_SUCCESS;
 }
