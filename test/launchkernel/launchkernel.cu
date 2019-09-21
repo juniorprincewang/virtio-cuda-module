@@ -82,8 +82,10 @@ int main()
     int nbytes = num * sizeof(float);
     int value=41;
     struct timeval malloc_start, malloc_end;
+    struct timeval meminit_start, meminit_end;
     struct timeval free_start, free_end;
     struct timeval d_malloc_start, d_malloc_end;
+    struct timeval d_meminit_start, d_meminit_end;
     struct timeval d_free_start, d_free_end;
     struct timeval HtoD_start, HtoD_end;
     struct timeval DtoH_start, DtoH_end;
@@ -122,7 +124,15 @@ int main()
 	#ifdef  TIMING
 		gettimeofday(&malloc_end, NULL);
 	#endif
+
+	printf("initing mem\n");
+	#ifdef  TIMING
+		gettimeofday(&meminit_start, NULL);
+	#endif
 	memset(h_a, 0, nbytes);
+	#ifdef  TIMING
+		gettimeofday(&meminit_end, NULL);
+	#endif
 	printf("h_a=%p\n", h_a);
 	// h_a[0] = 1;
 	// start
@@ -134,7 +144,14 @@ int main()
 	#ifdef  TIMING
 		gettimeofday(&d_malloc_end, NULL);
 	#endif
+	printf("d_a address = %p\n", d_a);
+	#ifdef  TIMING
+		gettimeofday(&d_meminit_start, NULL);
+	#endif
 	CHECK(cudaMemset(d_a, 0, nbytes));
+	#ifdef  TIMING
+		gettimeofday(&d_meminit_end, NULL);
+	#endif
 	
 	// set kernel launch configuration
     block = dim3(4);
@@ -193,22 +210,26 @@ int main()
 	gettimeofday(&total_end, NULL);
 	double total_time 	= tvsub(total_start, total_end);
 	double malloc_time 	= tvsub(malloc_start, malloc_end);
+	double meminit_time 	= tvsub(meminit_start, meminit_end);
 	double free_time 	= tvsub(free_start, free_end);
 	double d_malloc_time 	= tvsub(d_malloc_start, d_malloc_end);
+	double d_meminit_time 	= tvsub(d_meminit_start, d_meminit_end);
 	double d_free_time 	= tvsub(d_free_start, d_free_end);
 	double HtoD_time 	= tvsub(HtoD_start, HtoD_end);
 	double DtoH_time 	= tvsub(DtoH_start, DtoH_end);
 	double kernel_time 	= tvsub(kernel_start, kernel_end);
 
 	printf("================\n");
-	printf("total_time : \t%f\n", total_time);
-	printf("host malloc: \t%f\n", malloc_time);
-	printf("device malloc: \t%f\n", d_malloc_time);
-	printf("HtoD: \t\t%f\n", HtoD_time);
-	printf("Exec: \t\t%f\n", kernel_time);
-	printf("DtoH: \t\t%f\n", DtoH_time);
-	printf("device free: \t%f\n", d_free_time);
-	printf("host free: \t%f\n", free_time);
+	printf("total_time : \t\t%f\n", total_time);
+	printf("host malloc: \t\t%f\n", malloc_time);
+	printf("host mem init: \t\t%f\n", meminit_time);
+	printf("device malloc: \t\t%f\n", d_malloc_time);
+	printf("device mem init: \t%f\n", d_meminit_time);
+	printf("HtoD: \t\t\t%f\n", HtoD_time);
+	printf("Exec: \t\t\t%f\n", kernel_time);
+	printf("DtoH: \t\t\t%f\n", DtoH_time);
+	printf("device free: \t\t%f\n", d_free_time);
+	printf("host free: \t\t%f\n", free_time);
 	printf("================\n");
 	#endif
 
