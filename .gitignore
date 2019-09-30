@@ -1,6 +1,6 @@
 virtio_cuda.o.ur-safe
 test/*/run
-lib/libcudart.so
+lib/libcudart.so*
 *.o
 NVIDIA_CUDA-9.1_Samples/bin/
 NVIDIA_CUDA-9.1_Samples/0_Simple/vectorAdd/vectorAdd

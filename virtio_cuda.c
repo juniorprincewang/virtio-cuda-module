@@ -2049,9 +2049,15 @@ int cuda_memcpy(VirtIOArg __user *arg, struct port *port)
 		gldebug("[+] now analyse return buf\n");
 		gldebug("[+] arg->cmd = %d\n", payload->cmd);
 		put_user(payload->cmd, &arg->cmd);
-	} else {
+	} else if (arg->flag == 4){
+		// direction of the transfer is inferred from the pointer values.
+		gldebug("[+] cudaMemcpyDefault!\n");
+	} else if (arg->flag == 0){
+		gldebug("[+] cudaMemcpyHostToHost!\n");
+	}else {
 		gldebug("[+] should not be here!\n");
 	}
+
 	kfree(payload);
 	return ret;
 }
@@ -2254,6 +2260,26 @@ int cuda_get_last_error(VirtIOArg __user *arg, struct port *port)
 	return ret;
 }
 
+int cuda_peek_at_last_error(VirtIOArg __user *arg, struct port *port)
+{
+	VirtIOArg *payload;
+	int ret;
+	func();
+
+	payload = (VirtIOArg *)memdup_user(arg, arg_len);
+	if(!payload) {
+		pr_err("[ERROR] can not malloc 0x%lx memory\n", arg_len);
+		return -ENOMEM;
+	}
+
+	ret = send_to_virtio(port, (void*)payload, arg_len);
+	gldebug("[+] now analyse return buf\n");
+	gldebug("[+] arg->cmd = %d\n", payload->cmd);
+	put_user(payload->cmd, &arg->cmd);
+	kfree(payload);
+	return ret;
+}
+
 int cuda_set_device(VirtIOArg __user *arg, struct port *port)
 {
 	VirtIOArg *payload;
@@ -2348,6 +2374,27 @@ int cuda_stream_create(VirtIOArg __user *arg, struct port *port)
 	gldebug("[+] arg->cmd = %d\n", payload->cmd);
 	put_user(payload->cmd, &arg->cmd);
 	put_user(payload->flag, &arg->flag);
+	kfree(payload);
+	return ret;
+}
+
+int cuda_stream_create_with_flags(VirtIOArg __user *arg, struct port *port)
+{
+	VirtIOArg *payload;
+	int ret;
+	func();
+
+	payload = (VirtIOArg *)memdup_user(arg, arg_len);
+	if(!payload) {
+		pr_err("[ERROR] can not malloc 0x%lx memory\n", arg_len);
+		return -ENOMEM;
+	}
+
+	ret = send_to_virtio(port, (void*)payload, arg_len);
+	gldebug("[+] now analyse return buf\n");
+	gldebug("[+] arg->cmd = %d\n", payload->cmd);
+	put_user(payload->cmd, &arg->cmd);
+	put_user(payload->dst, &arg->dst);
 	kfree(payload);
 	return ret;
 }
@@ -2693,6 +2740,9 @@ static long port_fops_ioctl(struct file *filp, unsigned int cmd, unsigned long a
 		case VIRTIO_IOC_STREAMCREATE:
 			cuda_stream_create((VirtIOArg __user*)arg, port);
 			break;
+		case VIRTIO_IOC_STREAMCREATEWITHFLAGS:
+			cuda_stream_create_with_flags((VirtIOArg __user*)arg, port);
+			break;
 		case VIRTIO_IOC_STREAMDESTROY:
 			cuda_stream_destroy((VirtIOArg __user*)arg, port);
 			break;
@@ -2716,6 +2766,9 @@ static long port_fops_ioctl(struct file *filp, unsigned int cmd, unsigned long a
 			break;
 		case VIRTIO_IOC_GETLASTERROR:
 			cuda_get_last_error((VirtIOArg __user*)arg, port);
+			break;
+		case VIRTIO_IOC_PEEKATLASTERROR:
+			cuda_peek_at_last_error((VirtIOArg __user*)arg, port);
 			break;
 		case VIRTIO_IOC_MEMCPY_ASYNC:
 			cuda_memcpy_async((VirtIOArg __user*)arg, port);

@@ -849,6 +849,19 @@ cudaError_t cudaStreamCreate(cudaStream_t *pStream)
 	return (cudaError_t)arg.cmd;	
 }
 
+cudaError_t cudaStreamCreateWithFlags(cudaStream_t *pStream, unsigned int flags)
+{
+	VirtIOArg arg;
+	func();
+	memset(&arg, 0, sizeof(VirtIOArg));
+	arg.cmd 	= VIRTIO_CUDA_STREAMCREATEWITHFLAGS;
+	arg.flag 	= flags;
+	arg.tid 	= syscall(SYS_gettid);
+	send_to_device(VIRTIO_IOC_STREAMCREATEWITHFLAGS, &arg);
+	 *pStream 	= (void*)(arg.dst);
+	return (cudaError_t)arg.cmd;
+}
+
 cudaError_t cudaStreamDestroy(cudaStream_t stream)
 {
 	VirtIOArg arg;
@@ -985,6 +998,17 @@ cudaError_t cudaGetLastError(void)
 	arg.cmd = VIRTIO_CUDA_GETLASTERROR;
 	arg.tid = syscall(SYS_gettid);
 	send_to_device(VIRTIO_IOC_GETLASTERROR, &arg);
+	return (cudaError_t)arg.cmd;
+}
+
+cudaError_t cudaPeekAtLastError(void)
+{
+	VirtIOArg arg;
+	func();
+	memset(&arg, 0, sizeof(VirtIOArg));
+	arg.cmd = VIRTIO_CUDA_PEEKATLASTERROR;
+	arg.tid = syscall(SYS_gettid);
+	send_to_device(VIRTIO_IOC_PEEKATLASTERROR, &arg);
 	return (cudaError_t)arg.cmd;
 }
 

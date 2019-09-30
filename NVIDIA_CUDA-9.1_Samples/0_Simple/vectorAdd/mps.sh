@@ -1,2 +1,2 @@
-./vectorAdd &
-./vectorAdd
+time ./vectorAdd &
+time ./vectorAdd &

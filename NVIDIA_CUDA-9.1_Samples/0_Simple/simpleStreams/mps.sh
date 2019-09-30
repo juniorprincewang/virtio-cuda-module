@@ -1,0 +1,2 @@
+time ./simpleStreams &
+time ./simpleStreams &

@@ -97,18 +97,13 @@ int main()
 			cudaGetDevice
 			cudaGetDeviceProperties
 	*/
-/*
-	cudaGetDeviceCount(&count);
+	devID = 0;
+	CHECK(cudaSetDevice(devID));
+	CHECK(cudaGetDeviceCount(&count));
 	printf("cuda count=%d\n", count);
-	
-	printf("[=] Before devID is %d\n",  devID);
-	cudaGetDevice(&devID);
-	printf("[=] After devID is %d\n",  devID);
-	printf("prop=%lu\n", sizeof(struct cudaDeviceProp));	
-	cudaGetDeviceProperties(&props, devID);
+	// CHECK(cudaGetDevice(&devID));
+	CHECK(cudaGetDeviceProperties(&props, devID));
 	printf("Device %d: \"%s\" with Compute %d.%d capability\n",devID, props.name, props.major, props.minor);
-	// return 0;
-*/
 
 	// printf("num 0x%x\n", num);
 	#ifdef  TIMING
@@ -136,7 +131,7 @@ int main()
 	printf("h_a=%p\n", h_a);
 	// h_a[0] = 1;
 	// start
-	CHECK(cudaSetDevice(0));
+
 	#ifdef  TIMING
 		gettimeofday(&d_malloc_start, NULL);
 	#endif
