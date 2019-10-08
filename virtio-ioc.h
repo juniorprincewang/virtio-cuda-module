@@ -1,7 +1,7 @@
 #ifndef VIRTCR_IOC_H
 #define VIRTCR_IOC_H
 
-// #define VIRTIO_CUDA_DEBUG
+#define VIRTIO_CUDA_DEBUG
 #define KMALLOC_SHIFT 22 // 4MB
 #define KMALLOC_SIZE (1UL<<KMALLOC_SHIFT)
 
@@ -14,6 +14,7 @@
 #include <sys/ioctl.h>
 #include "cuda.h"
 #include "cuda_runtime.h"
+#include <cublas_v2.h>
 
 #define VIRTIO_CUDA_HELLO 0
 /** module control	**/
@@ -67,6 +68,14 @@
 
 #define VIRTIO_CUDA_PEEKATLASTERROR 41
 
+//----------------------------------
+#define VIRTIO_CUBLAS_CREATE 	100
+#define VIRTIO_CUBLAS_DESTROY 	101
+#define VIRTIO_CUBLAS_SETVECTOR 102
+#define VIRTIO_CUBLAS_GETVECTOR 103
+#define VIRTIO_CUBLAS_SGEMM 	104
+
+
 struct GPUDevice {
 	uint32_t device_id;
 	struct cudaDeviceProp prop;
@@ -100,12 +109,16 @@ typedef struct VirtIOArg
 	uint32_t tid;
 	uint64_t src;
 	uint32_t srcSize;
+	uint64_t src2;
+	uint32_t srcSize2;
 	uint64_t dst;
 	uint32_t dstSize;
 	uint64_t flag;
 	uint64_t param;
+	uint32_t paramSize;
 	uint64_t param2;
 } VirtIOArg;
+
 /* see ioctl-number in https://github.com/torvalds/
 	linux/blob/master/Documentation/ioctl/ioctl-number.txt
 */
@@ -206,4 +219,14 @@ typedef struct VirtIOArg
 #define VIRTIO_IOC_PEEKATLASTERROR \
 	_IOWR(VIRTIO_IOC_ID,41,VirtIOArg)
 
+#define VIRTIO_IOC_CUBLAS_CREATE \
+	_IOWR(VIRTIO_IOC_ID,100,VirtIOArg)
+#define VIRTIO_IOC_CUBLAS_DESTROY \
+	_IOWR(VIRTIO_IOC_ID,101,VirtIOArg)
+#define VIRTIO_IOC_CUBLAS_SETVECTOR \
+	_IOWR(VIRTIO_IOC_ID,102,VirtIOArg)
+#define VIRTIO_IOC_CUBLAS_GETVECTOR \
+	_IOWR(VIRTIO_IOC_ID,103,VirtIOArg)
+#define VIRTIO_IOC_CUBLAS_SGEMM \
+	_IOWR(VIRTIO_IOC_ID,104,VirtIOArg)
 #endif

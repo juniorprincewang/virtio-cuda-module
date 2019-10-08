@@ -114,6 +114,8 @@ int main(int argc, char **argv)
         return EXIT_FAILURE;
     }
 
+    printf("cublas handle %lx\n", (long unsigned int)handle);
+
     /* Allocate host memory for the matrices */
     h_A = (float *)malloc(n2 * sizeof(h_A[0]));
 

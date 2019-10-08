@@ -3,6 +3,7 @@
 #include <cuda.h>
 #include <cuda_runtime.h>
 #include <fatBinaryCtl.h>
+#include <cublas_v2.h>
 
 #include <string.h> // memset
 #include <stdio.h>
@@ -72,7 +73,7 @@ __attribute__ ((destructor)) void my_fini(void);
 /*
  * ioctl
 */
-void send_to_device(int cmd, VirtIOArg *arg)
+void send_to_device(int cmd, void *arg)
 {
 	if(ioctl(fd, cmd, arg) == -1){
 		error("ioctl when cmd is %d\n", _IOC_NR(cmd));
@@ -1346,3 +1347,147 @@ const char *cudaGetErrorString(cudaError_t error)
 
     return "<unknown>";
 }
+
+CUBLASAPI cublasStatus_t cublasCreate_v2 (cublasHandle_t *handle)
+{
+	VirtIOArg arg;
+	func();
+	memset(&arg, 0, sizeof(VirtIOArg));
+	arg.cmd 	= VIRTIO_CUBLAS_CREATE;
+	arg.srcSize = sizeof(cublasHandle_t);
+	arg.src 	= (uint64_t)handle;
+	send_to_device(VIRTIO_IOC_CUBLAS_CREATE, &arg);
+	return (cublasStatus_t)arg.cmd;
+}
+
+CUBLASAPI cublasStatus_t cublasDestroy_v2 (cublasHandle_t handle)
+{
+	VirtIOArg arg;
+	func();
+	memset(&arg, 0, sizeof(VirtIOArg));
+	arg.cmd 	= VIRTIO_CUBLAS_DESTROY;
+	arg.srcSize = sizeof(cublasHandle_t);
+	arg.src 	= (uint64_t)&handle;
+	send_to_device(VIRTIO_IOC_CUBLAS_DESTROY, &arg);
+	return (cublasStatus_t)arg.cmd;
+}
+
+CUBLASAPI cublasStatus_t cublasSetVector (int n, int elemSize, const void *x,
+                                             int incx, void *devicePtr, int incy)
+{
+	VirtIOArg arg;
+	uint8_t *buf = NULL;
+	int len = 0;
+	int idx = 0;
+	int int_size = sizeof(int);
+	func();
+	memset(&arg, 0, sizeof(VirtIOArg));
+	arg.cmd 	= VIRTIO_CUBLAS_SETVECTOR;
+	arg.srcSize = n * elemSize;
+	arg.src 	= (uint64_t)x;
+	arg.dst 	= (uint64_t)devicePtr;
+	len = int_size * 4 ;
+	buf = malloc(len);
+	memcpy(buf+idx, &n, int_size);
+	idx += int_size;
+	memcpy(buf+idx, &elemSize, int_size);
+	idx += int_size;
+	memcpy(buf+idx, &incx, int_size);
+	idx += int_size;
+	memcpy(buf+idx, &incy, int_size);
+	arg.param 	= (uint64_t)buf;
+	arg.dstSize = len;
+	send_to_device(VIRTIO_IOC_CUBLAS_SETVECTOR, &arg);
+	return (cublasStatus_t)arg.cmd;
+}
+
+CUBLASAPI cublasStatus_t cublasGetVector (int n, int elemSize, const void *x,
+                                             int incx, void *y, int incy)
+{
+	VirtIOArg arg;
+	uint8_t *buf = NULL;
+	int len = 0;
+	int idx = 0;
+	int int_size = sizeof(int);
+	func();
+	memset(&arg, 0, sizeof(VirtIOArg));
+	arg.cmd 	= VIRTIO_CUBLAS_GETVECTOR;
+	arg.srcSize = n * elemSize;
+	arg.src 	= (uint64_t)x;
+	arg.dst 	= (uint64_t)y;
+	len = int_size * 4 ;
+	buf = malloc(len);
+	memcpy(buf+idx, &n, int_size);
+	idx += int_size;
+	memcpy(buf+idx, &elemSize, int_size);
+	idx += int_size;
+	memcpy(buf+idx, &incx, int_size);
+	idx += int_size;
+	memcpy(buf+idx, &incy, int_size);
+	arg.param 	= (uint64_t)buf;
+	arg.dstSize = len;
+	send_to_device(VIRTIO_IOC_CUBLAS_GETVECTOR, &arg);
+	return (cublasStatus_t)arg.cmd;
+}
+
+/* GEMM */
+CUBLASAPI cublasStatus_t cublasSgemm_v2 (cublasHandle_t handle,
+	                                      cublasOperation_t transa,
+	                                      cublasOperation_t transb,
+	                                      int m,
+	                                      int n,
+	                                      int k,
+	                                      const float *alpha, /* host or device pointer */
+	                                      const float *A,
+	                                      int lda,
+	                                      const float *B,
+	                                      int ldb,
+	                                      const float *beta, /* host or device pointer */
+	                                      float *C,
+	                                      int ldc)
+{
+	VirtIOArg arg;
+	uint8_t *buf = NULL;
+	int len = 0;
+	int idx = 0;
+	int int_size = sizeof(int);
+
+	func();
+	memset(&arg, 0, sizeof(VirtIOArg));
+	arg.cmd 	= VIRTIO_CUBLAS_SGEMM;
+	arg.src 	= (uint64_t)A;
+	arg.srcSize = m * k;
+	arg.src2 	= (uint64_t)B;
+	arg.srcSize2 = k * n;
+	arg.dst 	= (uint64_t)C;
+	arg.dstSize = m * n;
+	len = int_size * 6 + sizeof(cublasHandle_t) + 
+			sizeof(cublasOperation_t)*2 + sizeof(float)*2;
+	buf = malloc(len);
+	memcpy(buf+idx, &handle, sizeof(cublasHandle_t));
+	idx += sizeof(cublasHandle_t);
+	memcpy(buf+idx, &transa, sizeof(cublasOperation_t));
+	idx += sizeof(cublasOperation_t);
+	memcpy(buf+idx, &transb, sizeof(cublasOperation_t));
+	idx += sizeof(cublasOperation_t);
+	memcpy(buf+idx, &m, int_size);
+	idx += int_size;
+	memcpy(buf+idx, &n, int_size);
+	idx += int_size;
+	memcpy(buf+idx, &k, int_size);
+	idx += int_size;
+	memcpy(buf+idx, &lda, int_size);
+	idx += int_size;
+	memcpy(buf+idx, &ldb, int_size);
+	idx += int_size;
+	memcpy(buf+idx, &ldc, int_size);
+	idx += int_size;
+	memcpy(buf+idx, alpha, sizeof(float));
+	idx += sizeof(float);
+	memcpy(buf+idx, beta, sizeof(float));
+	arg.param 		= (uint64_t)buf;
+	arg.paramSize 	= len;
+	send_to_device(VIRTIO_IOC_CUBLAS_SGEMM, &arg);
+	return (cublasStatus_t)arg.cmd;
+}
+
