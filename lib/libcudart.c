@@ -96,6 +96,32 @@ static size_t roundup(size_t n, size_t alignment)
 {
 	return (n+(alignment-1))/alignment * alignment;
 }
+/*
+static void mmapctl(void *ptr)
+{
+	VirtIOArg arg;
+	BlockHeader* blk = NULL;
+	func();
+	blk = get_block_by_ptr(ptr);
+	if(!blk) {
+		return;
+	}
+	void *origin_addr 	= blk->address;
+	size_t total_size 	= blk->total_size;
+	size_t data_size 	= blk->data_size;
+	memset(&arg, 0, ARG_LEN);
+	arg.cmd 	= VIRTIO_CUDA_MMAPCTL;
+	arg.src 	= (uint64_t)origin_addr;
+	arg.srcSize = total_size;
+	arg.tid 	= syscall(SYS_gettid);
+	send_to_device(VIRTIO_IOC_MMAPCTL, &arg);
+	
+	blk->address 		= origin_addr;
+	blk->total_size    	= total_size;
+	blk->data_size     	= data_size;
+	blk->magic         	= BLOCK_MAGIC;
+}
+*/
 
 static void *__mmalloc(size_t size)
 {
@@ -123,12 +149,15 @@ static void *__mmalloc(size_t size)
 	src = (char*)ptr + data_start_offset;
 	debug("get ptr =%p, size=%lx\n", ptr, blocks_size);
 	debug("return src =%p\n", src);
+	// mmapctl(src);
+
 	memset(&arg, 0, ARG_LEN);
 	arg.cmd 	= VIRTIO_CUDA_MMAPCTL;
 	arg.src 	= (uint64_t)ptr;
 	arg.srcSize = blocks_size;
 	arg.tid 	= syscall(SYS_gettid);
 	send_to_device(VIRTIO_IOC_MMAPCTL, &arg);
+	
 	blk->address 		= ptr;
 	blk->total_size    	= blocks_size;
 	blk->data_size     	= size;
@@ -589,6 +618,9 @@ cudaError_t cudaMemcpy(void *dst, const void *src, size_t count, enum cudaMemcpy
 {
 	VirtIOArg arg;
 	func();
+	if (kind <0 || kind >4) {
+		return cudaErrorInvalidMemcpyDirection;
+	}
 	memset(&arg, 0, sizeof(VirtIOArg));
 	arg.cmd 	= VIRTIO_CUDA_MEMCPY;
 	arg.flag 	= kind;
@@ -598,6 +630,10 @@ cudaError_t cudaMemcpy(void *dst, const void *src, size_t count, enum cudaMemcpy
 	arg.dstSize = count;
 	arg.tid 	= syscall(SYS_gettid);
 	send_to_device(VIRTIO_IOC_MEMCPY, &arg);
+	if (arg.flag == cudaMemcpyHostToHost) {
+		memcpy(dst, src, count);
+		return cudaSuccess;
+	}
 	return (cudaError_t)arg.cmd;	
 }
 
@@ -664,6 +700,10 @@ cudaError_t cudaMemcpyAsync(
 {
 	VirtIOArg arg;
 	func();
+	if (kind <0 || kind >4) {
+		debug("direction is %d\n", kind);
+		return cudaErrorInvalidMemcpyDirection;
+	}
 	memset(&arg, 0, sizeof(VirtIOArg));
 	arg.cmd 	= VIRTIO_CUDA_MEMCPY_ASYNC;
 	arg.flag 	= kind;
@@ -674,6 +714,10 @@ cudaError_t cudaMemcpyAsync(
 	arg.param 	= (uint64_t)stream;
 	arg.tid 	= syscall(SYS_gettid);
 	send_to_device(VIRTIO_IOC_MEMCPY_ASYNC, &arg);
+	if (arg.flag == cudaMemcpyHostToHost) {
+		memcpy(dst, src, count);
+		return cudaSuccess;
+	}
 	return (cudaError_t)arg.cmd;	
 }
 

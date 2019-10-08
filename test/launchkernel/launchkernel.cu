@@ -155,7 +155,8 @@ int main()
 	#ifdef  TIMING
 		gettimeofday(&HtoD_start, NULL);
 	#endif
-	CHECK(cudaMemcpy(d_a, h_a, nbytes, cudaMemcpyHostToDevice));
+	// CHECK(cudaMemcpy(d_a, h_a, nbytes, cudaMemcpyHostToDevice));
+	CHECK(cudaMemcpy(d_a, h_a, nbytes, cudaMemcpyDefault));
 	#ifdef  TIMING
 		gettimeofday(&HtoD_end, NULL);
 	#endif
@@ -170,7 +171,8 @@ int main()
 	#ifdef  TIMING
 		gettimeofday(&DtoH_start, NULL);
 	#endif
-	CHECK(cudaMemcpy(h_a, d_a, nbytes, cudaMemcpyDeviceToHost));
+	// CHECK(cudaMemcpy(h_a, d_a, nbytes, cudaMemcpyDeviceToHost));
+	CHECK(cudaMemcpy(h_a, d_a, nbytes, cudaMemcpyDefault));
 	#ifdef  TIMING
 		gettimeofday(&DtoH_end, NULL);
 	#endif
