@@ -12,7 +12,7 @@ The front-end driver is responsible for the memory management, data movement, an
 
 #### Host
 
-* Ubuntu 16.04.5 LTS (kernel v4.15.0-29-generic  )
+* Ubuntu 16.04.5 LTS (kernel v4.15.0-29-generic  x86_64)
 * cuda-9.1
 * PATH
 
@@ -33,7 +33,7 @@ automake libtool libsdl1.2-dev libsasl2-dev libcurl4-openssl-dev libsasl2-dev li
 
 #### Guest
 
-* Ubuntu 16.04 image (guest OS)
+* Ubuntu 16.04 x86_64 image (guest OS)
 * cuda-9.1 toolkit
 
 ### How to install

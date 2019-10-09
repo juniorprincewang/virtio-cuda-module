@@ -2894,7 +2894,243 @@ int cublas_get_vector(VirtIOArg __user *arg, struct port *port)
 	return ret;
 }
 
-int cublas_sgemm(VirtIOArg __user *arg, struct port *port)
+int cublas_set_stream(VirtIOArg __user *arg, struct port *port)
+{
+	VirtIOArg *payload;
+	int len = sizeof(VirtIOArg);
+	int ret;
+
+	func();
+	payload = (VirtIOArg *)memdup_user(arg, len);
+	if(!payload) {
+		pr_err("[ERROR] can not malloc 0x%x memory\n", len);
+		return -ENOMEM;
+	}
+	ret = send_to_virtio(port, (void*)payload, len);
+	gldebug("[+] now analyse return buf\n");
+	gldebug("[+] arg->cmd = %d\n", payload->cmd);
+	put_user(payload->cmd, &arg->cmd);
+	kfree(payload);
+	return ret;
+}
+
+int cublas_get_stream(VirtIOArg __user *arg, struct port *port)
+{
+	VirtIOArg *payload;
+	int ret;
+	func();
+
+	payload = (VirtIOArg *)memdup_user(arg, arg_len);
+	if(!payload) {
+		pr_err("[ERROR] can not malloc 0x%lx memory\n", arg_len);
+		return -ENOMEM;
+	}
+	ret = send_to_virtio(port, (void*)payload, arg_len);
+	gldebug("[+] now analyse return buf\n");
+	gldebug("[+] arg->cmd = %d\n", payload->cmd);
+	put_user(payload->cmd, &arg->cmd);
+	put_user(payload->flag, &arg->flag);
+	kfree(payload);
+	return ret;
+}
+
+static int cublas_asum(VirtIOArg __user *arg, struct port *port)
+{
+	VirtIOArg *payload;
+	int ret;
+	func();
+
+	payload = (VirtIOArg *)memdup_user(arg, arg_len);
+	if(!payload) {
+		pr_err("[ERROR] can not malloc 0x%lx memory\n", arg_len);
+		return -ENOMEM;
+	}
+	ret = send_to_virtio(port, (void*)payload, arg_len);
+	gldebug("[+] now analyse return buf\n");
+	gldebug("[+] arg->cmd = %d\n", payload->cmd);
+	put_user(payload->cmd, &arg->cmd);
+	put_user(payload->flag, &arg->flag);
+	kfree(payload);
+	return ret;
+}
+
+int cublas_sasum(VirtIOArg __user *arg, struct port *port)
+{
+	func();
+	return cublas_asum(arg, port);
+}
+
+int cublas_dasum(VirtIOArg __user *arg, struct port *port)
+{
+	func();
+	return cublas_asum(arg, port);
+}
+
+static int cublas_axpy(VirtIOArg __user *arg, struct port *port)
+{
+	VirtIOArg *payload;
+	int ret;
+	func();
+
+	payload = (VirtIOArg *)memdup_user(arg, arg_len);
+	if(!payload) {
+		pr_err("[ERROR] can not malloc 0x%lx memory\n", arg_len);
+		return -ENOMEM;
+	}
+	ret = send_to_virtio(port, (void*)payload, arg_len);
+	gldebug("[+] now analyse return buf\n");
+	gldebug("[+] arg->cmd = %d\n", payload->cmd);
+	put_user(payload->cmd, &arg->cmd);
+	kfree(payload);
+	return ret;
+}
+
+int cublas_saxpy(VirtIOArg __user *arg, struct port *port)
+{
+	func();
+	return cublas_axpy(arg, port);
+}
+
+int cublas_daxpy(VirtIOArg __user *arg, struct port *port)
+{
+	func();
+	return cublas_axpy(arg, port);
+}
+
+static int cublas_copy(VirtIOArg __user *arg, struct port *port)
+{
+	VirtIOArg *payload;
+	int ret;
+	func();
+
+	payload = (VirtIOArg *)memdup_user(arg, arg_len);
+	if(!payload) {
+		pr_err("[ERROR] can not malloc 0x%lx memory\n", arg_len);
+		return -ENOMEM;
+	}
+	ret = send_to_virtio(port, (void*)payload, arg_len);
+	gldebug("[+] now analyse return buf\n");
+	gldebug("[+] arg->cmd = %d\n", payload->cmd);
+	put_user(payload->cmd, &arg->cmd);
+	kfree(payload);
+	return ret;
+}
+
+int cublas_scopy(VirtIOArg __user *arg, struct port *port)
+{
+	func();
+	return cublas_copy(arg, port);
+}
+
+int cublas_dcopy(VirtIOArg __user *arg, struct port *port)
+{
+	func();
+	return cublas_copy(arg, port);
+}
+
+static int cublas_dot(VirtIOArg __user *arg, struct port *port)
+{
+	VirtIOArg *payload;
+	int ret;
+	func();
+
+	payload = (VirtIOArg *)memdup_user(arg, arg_len);
+	if(!payload) {
+		pr_err("[ERROR] can not malloc 0x%lx memory\n", arg_len);
+		return -ENOMEM;
+	}
+	ret = send_to_virtio(port, (void*)payload, arg_len);
+	gldebug("[+] now analyse return buf\n");
+	gldebug("[+] arg->cmd = %d\n", payload->cmd);
+	put_user(payload->cmd, &arg->cmd);
+	put_user(payload->flag, &arg->flag);
+	kfree(payload);
+	return ret;
+}
+
+int cublas_sdot(VirtIOArg __user *arg, struct port *port)
+{
+	func();
+	return cublas_dot(arg, port);
+}
+
+int cublas_ddot(VirtIOArg __user *arg, struct port *port)
+{
+	func();
+	return cublas_dot(arg, port);
+}
+
+static int cublas_scal(VirtIOArg __user *arg, struct port *port)
+{
+	VirtIOArg *payload;
+	int ret;
+	func();
+
+	payload = (VirtIOArg *)memdup_user(arg, arg_len);
+	if(!payload) {
+		pr_err("[ERROR] can not malloc 0x%lx memory\n", arg_len);
+		return -ENOMEM;
+	}
+	ret = send_to_virtio(port, (void*)payload, arg_len);
+	gldebug("[+] now analyse return buf\n");
+	gldebug("[+] arg->cmd = %d\n", payload->cmd);
+	put_user(payload->cmd, &arg->cmd);
+	kfree(payload);
+	return ret;
+}
+
+int cublas_sscal(VirtIOArg __user *arg, struct port *port)
+{
+	func();
+	return cublas_scal(arg, port);
+}
+
+int cublas_dscal(VirtIOArg __user *arg, struct port *port)
+{
+	func();
+	return cublas_scal(arg, port);
+}
+
+static int cublas_gemv(VirtIOArg __user *arg, struct port *port)
+{
+	VirtIOArg *payload;
+	int ret;
+	void *ptr;
+
+	func();
+	payload = (VirtIOArg *)memdup_user(arg, arg_len);
+	if(!payload) {
+		pr_err("[ERROR] can not malloc 0x%lx memory\n", arg_len);
+		return -ENOMEM;
+	}
+	ptr = memdup_user((const void __user*)arg->param, arg->paramSize);
+	if(!ptr) {
+		pr_err("[ERROR] can not malloc 0x%x memory\n", arg->paramSize);
+		return -ENOMEM;
+	}
+	payload->param = (uint64_t)virt_to_phys(ptr);
+	ret = send_to_virtio(port, (void*)payload, arg_len);
+	gldebug("[+] now analyse return buf\n");
+	gldebug("[+] arg->cmd = %d\n", payload->cmd);
+	put_user(payload->cmd, &arg->cmd);
+	kfree(ptr);
+	kfree(payload);
+	return ret;
+}
+
+int cublas_sgemv(VirtIOArg __user *arg, struct port *port)
+{
+	func();
+	return cublas_gemv(arg, port);
+}
+
+int cublas_dgemv(VirtIOArg __user *arg, struct port *port)
+{
+	func();
+	return cublas_gemv(arg, port);
+}
+
+static int cublas_gemm(VirtIOArg __user *arg, struct port *port)
 {
 	VirtIOArg *payload;
 	int len = sizeof(VirtIOArg);
@@ -2921,6 +3157,18 @@ int cublas_sgemm(VirtIOArg __user *arg, struct port *port)
 	kfree(ptr);
 	kfree(payload);
 	return ret;
+}
+
+int cublas_sgemm(VirtIOArg __user *arg, struct port *port)
+{
+	func();
+	return cublas_gemm(arg, port);
+}
+
+int cublas_dgemm(VirtIOArg __user *arg, struct port *port)
+{
+	func();
+	return cublas_gemm(arg, port);
 }
 
 int cuda_gpa_to_hva(VirtIOArg __user *arg, struct port *port)
@@ -3123,8 +3371,53 @@ static long port_fops_ioctl(struct file *filp, unsigned int cmd, unsigned long a
 		case VIRTIO_IOC_CUBLAS_GETVECTOR:
 			cublas_get_vector((VirtIOArg __user*)arg, port);
 			break;
+		case VIRTIO_IOC_CUBLAS_SETSTREAM:
+			cublas_set_stream((VirtIOArg __user*)arg, port);
+			break;
+		case VIRTIO_IOC_CUBLAS_GETSTREAM:
+			cublas_get_stream((VirtIOArg __user*)arg, port);
+			break;
+		case VIRTIO_IOC_CUBLAS_SASUM:
+			cublas_sasum((VirtIOArg __user*)arg, port);
+			break;
+		case VIRTIO_IOC_CUBLAS_DASUM:
+			cublas_dasum((VirtIOArg __user*)arg, port);
+			break;
+		case VIRTIO_IOC_CUBLAS_SAXPY:
+			cublas_saxpy((VirtIOArg __user*)arg, port);
+			break;
+		case VIRTIO_IOC_CUBLAS_DAXPY:
+			cublas_daxpy((VirtIOArg __user*)arg, port);
+			break;
+		case VIRTIO_IOC_CUBLAS_SCOPY:
+			cublas_scopy((VirtIOArg __user*)arg, port);
+			break;
+		case VIRTIO_IOC_CUBLAS_DCOPY:
+			cublas_dcopy((VirtIOArg __user*)arg, port);
+			break;
+		case VIRTIO_IOC_CUBLAS_SDOT:
+			cublas_sdot((VirtIOArg __user*)arg, port);
+			break;
+		case VIRTIO_IOC_CUBLAS_DDOT:
+			cublas_ddot((VirtIOArg __user*)arg, port);
+			break;
+		case VIRTIO_IOC_CUBLAS_SSCAL:
+			cublas_sscal((VirtIOArg __user*)arg, port);
+			break;
+		case VIRTIO_IOC_CUBLAS_DSCAL:
+			cublas_dscal((VirtIOArg __user*)arg, port);
+			break;
+		case VIRTIO_IOC_CUBLAS_SGEMV:
+			cublas_sgemv((VirtIOArg __user*)arg, port);
+			break;
+		case VIRTIO_IOC_CUBLAS_DGEMV:
+			cublas_dgemv((VirtIOArg __user*)arg, port);
+			break;
 		case VIRTIO_IOC_CUBLAS_SGEMM:
 			cublas_sgemm((VirtIOArg __user*)arg, port);
+			break;
+		case VIRTIO_IOC_CUBLAS_DGEMM:
+			cublas_dgemm((VirtIOArg __user*)arg, port);
 			break;
 		default:
 			pr_err("[#] illegel VIRTIO ioctl nr = %u!\n", \
