@@ -87,7 +87,7 @@ BlockHeader* get_block_by_ptr(void* p)
 
 	if (blk->magic != BLOCK_MAGIC)
 	{
-		debug("no magic 0x%lx\n", BLOCK_MAGIC);
+		// debug("no magic 0x%lx\n", BLOCK_MAGIC);
 		return NULL;
 	}
 	return blk;
@@ -142,7 +142,7 @@ static void *__mmalloc(size_t size)
 		error("mmap failed, error: %s.\n", strerror(errno));
 		return NULL;
 	}
-	func();
+	// func();
 	map_offset += blocks_size;
 	BlockHeader* blk 	= (BlockHeader*)((char*)ptr + header_start_offset);
 
@@ -170,7 +170,7 @@ static void munmapctl(void *ptr)
 {
 	VirtIOArg arg;
 	BlockHeader* blk = NULL;
-	func();
+	// func();
 	blk = get_block_by_ptr(ptr);
 	if(!blk) {
 		return;
@@ -193,7 +193,7 @@ void *malloc(size_t size)
 void free(void *ptr)
 {
 	BlockHeader* blk = NULL;
-	func();
+	// func();
 	if (ptr == NULL)
 		return;
 	blk = get_block_by_ptr(ptr);
@@ -334,12 +334,13 @@ void** __cudaRegisterFatBinary(void *fatCubin)
 
 void __cudaUnregisterFatBinary(void **fatCubinHandle)
 {
-	VirtIOArg arg;
-	func();
-	memset(&arg, 0, ARG_LEN);
-	arg.cmd = VIRTIO_CUDA_UNREGISTERFATBINARY;
-	arg.tid = syscall(SYS_gettid);
-	send_to_device(VIRTIO_IOC_UNREGISTERFATBINARY, &arg);
+	// VirtIOArg arg;
+	// func();
+	// memset(&arg, 0, ARG_LEN);
+	// arg.cmd = VIRTIO_CUDA_UNREGISTERFATBINARY;
+	// arg.src = (uint64_t)(*fatCubinHandle);
+	// arg.tid = syscall(SYS_gettid);
+	// send_to_device(VIRTIO_IOC_UNREGISTERFATBINARY, &arg);
 	if (fatCubinHandle != NULL)
 		__libc_free(fatCubinHandle);
 }
@@ -574,10 +575,10 @@ cudaError_t cudaLaunchKernel(
 	cudaStream_t stream
 )
 {
-	uint64_t fid;
+	// uint64_t fid;
 	func();
-	fid=(uint64_t)func;
-	debug("func id = 0x%lx\n", fid);
+	// fid=(uint64_t)func;
+	// debug("func id = 0x%lx\n", fid);
 	debug("szieof(args)   =0x%lx\n", sizeof(args));
 	debug("szieof(args[0])=0x%lx\n", sizeof(args[0]));
 
@@ -790,6 +791,10 @@ cudaError_t cudaFreeHost(void *ptr)
     if(!blk) {
 		return cudaErrorInitializationError;
     }
+    debug("blk->address   =0x%lx\n",(uint64_t)blk->address);
+	debug("blk->total_size=0x%lx\n",(uint64_t)blk->total_size);
+	debug("magic 0x%lx\n", blk->magic);
+    munmapctl(ptr);
     munmap(blk->address, blk->total_size);
 	return err;
 }
@@ -813,10 +818,9 @@ cudaError_t cudaGetDevice(int *device)
 	func();
 	memset(&arg, 0, sizeof(VirtIOArg));
 	arg.cmd 	= VIRTIO_CUDA_GETDEVICE;
-	arg.dst 	= (uint64_t)device;
-	arg.dstSize = sizeof(int);
 	arg.tid 	= syscall(SYS_gettid);
 	send_to_device(VIRTIO_IOC_GETDEVICE, &arg);
+	*device 	= (int)arg.flag;
 	return (cudaError_t)arg.cmd;
 }
 
@@ -903,7 +907,7 @@ cudaError_t cudaStreamCreateWithFlags(cudaStream_t *pStream, unsigned int flags)
 	arg.flag 	= flags;
 	arg.tid 	= syscall(SYS_gettid);
 	send_to_device(VIRTIO_IOC_STREAMCREATEWITHFLAGS, &arg);
-	 *pStream 	= (void*)(arg.dst);
+	 *pStream 	= (cudaStream_t)arg.dst;
 	return (cudaError_t)arg.cmd;
 }
 
@@ -1007,6 +1011,18 @@ cudaError_t cudaEventSynchronize(cudaEvent_t event)
 	arg.flag 	= (uint64_t)event;
 	arg.tid 	= syscall(SYS_gettid);
 	send_to_device(VIRTIO_IOC_EVENTSYNCHRONIZE, &arg);
+	return (cudaError_t)arg.cmd;	
+}
+
+cudaError_t cudaEventQuery(cudaEvent_t event)
+{
+	VirtIOArg arg;
+	func();
+	memset(&arg, 0, sizeof(VirtIOArg));
+	arg.cmd 	= VIRTIO_CUDA_EVENTQUERY;
+	arg.flag 	= (uint64_t)event;
+	arg.tid 	= syscall(SYS_gettid);
+	send_to_device(VIRTIO_IOC_EVENTQUERY, &arg);
 	return (cudaError_t)arg.cmd;	
 }
 
@@ -1356,7 +1372,7 @@ CUBLASAPI cublasStatus_t cublasCreate_v2 (cublasHandle_t *handle)
 	arg.cmd 	= VIRTIO_CUBLAS_CREATE;
 	arg.srcSize = sizeof(cublasHandle_t);
 	arg.src 	= (uint64_t)handle;
-	debug("sizeof(cublasHandle_t)=%lx\n", sizeof(cublasHandle_t));
+	// debug("sizeof(cublasHandle_t)=%lx\n", sizeof(cublasHandle_t));
 	send_to_device(VIRTIO_IOC_CUBLAS_CREATE, &arg);
 	return (cublasStatus_t)arg.cmd;
 }
@@ -1396,9 +1412,10 @@ CUBLASAPI cublasStatus_t cublasSetVector (int n, int elemSize, const void *x,
 	memcpy(buf+idx, &incx, int_size);
 	idx += int_size;
 	memcpy(buf+idx, &incy, int_size);
-	arg.param 	= (uint64_t)buf;
-	arg.dstSize = len;
+	arg.param 		= (uint64_t)buf;
+	arg.paramSize 	= len;
 	send_to_device(VIRTIO_IOC_CUBLAS_SETVECTOR, &arg);
+	free(buf);
 	return (cublasStatus_t)arg.cmd;
 }
 
@@ -1425,9 +1442,10 @@ CUBLASAPI cublasStatus_t cublasGetVector (int n, int elemSize, const void *x,
 	memcpy(buf+idx, &incx, int_size);
 	idx += int_size;
 	memcpy(buf+idx, &incy, int_size);
-	arg.param 	= (uint64_t)buf;
-	arg.dstSize = len;
+	arg.param 		= (uint64_t)buf;
+	arg.paramSize 	= len;
 	send_to_device(VIRTIO_IOC_CUBLAS_GETVECTOR, &arg);
+	free(buf);
 	return (cublasStatus_t)arg.cmd;
 }
 
@@ -1442,7 +1460,7 @@ CUBLASAPI cublasStatus_t cublasSetStream_v2 (cublasHandle_t handle, cudaStream_t
 	arg.dst = (uint64_t)streamId;
 	arg.tid = syscall(SYS_gettid);
 	send_to_device(VIRTIO_IOC_CUBLAS_SETSTREAM, &arg);
-	return (cudaError_t)arg.cmd;	
+	return (cublasStatus_t)arg.cmd;	
 }
 
 
@@ -1457,7 +1475,7 @@ CUBLASAPI cublasStatus_t cublasGetStream_v2 (cublasHandle_t handle, cudaStream_t
 	arg.tid = syscall(SYS_gettid);
 	send_to_device(VIRTIO_IOC_CUBLAS_GETSTREAM, &arg);
 	*streamId = (cudaStream_t)arg.flag;
-	return (cudaError_t)arg.cmd;
+	return (cublasStatus_t)arg.cmd;
 }
 
 CUBLASAPI cublasStatus_t cublasSasum_v2(cublasHandle_t handle, 
@@ -1472,10 +1490,12 @@ CUBLASAPI cublasStatus_t cublasSasum_v2(cublasHandle_t handle,
 	arg.cmd 	= VIRTIO_CUBLAS_SASUM;
 	arg.src 	= (uint64_t)x;
 	arg.srcSize = (uint32_t)n;
-	arg.param 	= (uint64_t)incx;
+	arg.srcSize2 = (uint32_t)incx;
 	arg.dst 	= (uint64_t)handle;
+	arg.param 		= (uint64_t)result;
+	arg.paramSize 	= sizeof(float);
 	send_to_device(VIRTIO_IOC_CUBLAS_SASUM, &arg);
-	*result 	= (float)arg.flag;
+	debug("result = %g\n", *result);
 	return (cublasStatus_t)arg.cmd;
 }
 
@@ -1491,56 +1511,12 @@ CUBLASAPI cublasStatus_t cublasDasum_v2(cublasHandle_t handle,
 	arg.cmd 	= VIRTIO_CUBLAS_DASUM;
 	arg.src 	= (uint64_t)x;
 	arg.srcSize = (uint32_t)n;
-	arg.param 	= (uint64_t)incx;
+	arg.srcSize2 	= (uint32_t)incx;
 	arg.dst 	= (uint64_t)handle;
+	arg.param 		= (uint64_t)result;
+	arg.paramSize 	= sizeof(double);
 	send_to_device(VIRTIO_IOC_CUBLAS_DASUM, &arg);
-	*result 	= (double)arg.flag;
-	return (cublasStatus_t)arg.cmd;
-}
-
-CUBLASAPI cublasStatus_t cublasSaxpy_v2 (cublasHandle_t handle,
-                                          int n, 
-                                          const float *alpha, /* host or device pointer */
-                                          const float *x, 
-                                          int incx, 
-                                          float *y, 
-                                          int incy)
-{
-	VirtIOArg arg;
-	func();
-	memset(&arg, 0, sizeof(VirtIOArg));
-	arg.cmd 	= VIRTIO_CUBLAS_SAXPY;
-	arg.src 	= (uint64_t)x;
-	arg.srcSize = (uint32_t)n;
-	arg.dst 	= (uint64_t)y;
-	arg.src2 	= (uint64_t)handle;
-	arg.srcSize2 	= (uint32_t)incx;
-	arg.dstSize = (uint32_t)incy;
-	arg.param 	= (uint64_t)alpha;
-	send_to_device(VIRTIO_IOC_CUBLAS_SAXPY, &arg);
-	return (cublasStatus_t)arg.cmd;
-}
-
-CUBLASAPI cublasStatus_t cublasDaxpy_v2 (cublasHandle_t handle,
-                                          int n, 
-                                          const double *alpha, /* host or device pointer */
-                                          const double *x, 
-                                          int incx, 
-                                          double *y, 
-                                          int incy)
-{
-	VirtIOArg arg;
-	func();
-	memset(&arg, 0, sizeof(VirtIOArg));
-	arg.cmd 	= VIRTIO_CUBLAS_DAXPY;
-	arg.src 	= (uint64_t)x;
-	arg.srcSize = (uint32_t)n;
-	arg.dst 	= (uint64_t)y;
-	arg.src2 	= (uint64_t)handle;
-	arg.srcSize2 	= (uint32_t)incx;
-	arg.dstSize = (uint32_t)incy;
-	arg.param 	= (uint64_t)alpha;
-	send_to_device(VIRTIO_IOC_CUBLAS_DAXPY, &arg);
+	debug("result = %g\n", *result);
 	return (cublasStatus_t)arg.cmd;
 }
 
@@ -1560,7 +1536,7 @@ CUBLASAPI cublasStatus_t cublasScopy_v2 (cublasHandle_t handle,
 	arg.dst 	= (uint64_t)y;
 	arg.src2 	= (uint64_t)handle;
 	arg.srcSize2 	= (uint32_t)incx;
-	arg.dstSize = (uint32_t)incy;
+	arg.dstSize 	= (uint32_t)incy;
 	send_to_device(VIRTIO_IOC_CUBLAS_SCOPY, &arg);
 	return (cublasStatus_t)arg.cmd;
 }
@@ -1581,7 +1557,7 @@ CUBLASAPI cublasStatus_t cublasDcopy_v2 (cublasHandle_t handle,
 	arg.dst 	= (uint64_t)y;
 	arg.src2 	= (uint64_t)handle;
 	arg.srcSize2 	= (uint32_t)incx;
-	arg.dstSize = (uint32_t)incy;
+	arg.dstSize 	= (uint32_t)incy;
 	send_to_device(VIRTIO_IOC_CUBLAS_DCOPY, &arg);
 	return (cublasStatus_t)arg.cmd;
 }
@@ -1600,12 +1576,14 @@ CUBLASAPI cublasStatus_t cublasSdot_v2 (cublasHandle_t handle,
 	arg.cmd 	= VIRTIO_CUBLAS_SDOT;
 	arg.src 	= (uint64_t)x;
 	arg.srcSize = (uint32_t)n;
-	arg.src2 	= (uint64_t)y;
-	arg.dst 	= (uint64_t)handle;
+	arg.dst 	= (uint64_t)y;
+	arg.src2 	= (uint64_t)handle;
 	arg.srcSize2 	= (uint32_t)incx;
-	arg.dstSize = (uint32_t)incy;
+	arg.dstSize 	= (uint32_t)incy;
+	arg.param 		= (uint64_t)result;
+	arg.paramSize 	= sizeof(float);
 	send_to_device(VIRTIO_IOC_CUBLAS_SDOT, &arg);
-	*result 	= (float)arg.flag;
+	debug("result = %g\n", *result);
 	return (cublasStatus_t)arg.cmd;
 }
 
@@ -1623,12 +1601,76 @@ CUBLASAPI cublasStatus_t cublasDdot_v2 (cublasHandle_t handle,
 	arg.cmd 	= VIRTIO_CUBLAS_DDOT;
 	arg.src 	= (uint64_t)x;
 	arg.srcSize = (uint32_t)n;
-	arg.src2 	= (uint64_t)y;
-	arg.dst 	= (uint64_t)handle;
+	arg.src2 	= (uint64_t)handle;
+	arg.dst 	= (uint64_t)y;
+	arg.srcSize2 	= (uint32_t)incx;
+	arg.dstSize 	= (uint32_t)incy;
+	arg.param 		= (uint64_t)result;
+	arg.paramSize 	= sizeof(double);
+	send_to_device(VIRTIO_IOC_CUBLAS_DDOT, &arg);
+	debug("result = %g\n", *result);
+	return (cublasStatus_t)arg.cmd;
+}
+
+CUBLASAPI cublasStatus_t cublasSaxpy_v2 (cublasHandle_t handle,
+                                          int n, 
+                                          const float *alpha, /* host or device pointer */
+                                          const float *x, 
+                                          int incx, 
+                                          float *y, 
+                                          int incy)
+{
+	VirtIOArg arg;
+	uint8_t *buf = NULL;
+	int len = 0;
+	int idx = 0;
+	func();
+	memset(&arg, 0, sizeof(VirtIOArg));
+	arg.cmd 	= VIRTIO_CUBLAS_SAXPY;
+	arg.src 	= (uint64_t)x;
+	arg.srcSize = (uint32_t)n;
+	arg.dst 	= (uint64_t)y;
+	arg.src2 	= (uint64_t)handle;
+	arg.srcSize2 	= (uint32_t)incx;
+	arg.dstSize 	= (uint32_t)incy;
+	len = sizeof(float);
+	buf = malloc(len);
+	memcpy(buf+idx, alpha, sizeof(float));
+	arg.param 		= (uint64_t)buf;
+	arg.paramSize 	= (uint32_t)len;
+	send_to_device(VIRTIO_IOC_CUBLAS_SAXPY, &arg);
+	free(buf);
+	return (cublasStatus_t)arg.cmd;
+}
+
+CUBLASAPI cublasStatus_t cublasDaxpy_v2 (cublasHandle_t handle,
+                                          int n, 
+                                          const double *alpha, /* host or device pointer */
+                                          const double *x, 
+                                          int incx, 
+                                          double *y, 
+                                          int incy)
+{
+	VirtIOArg arg;
+	uint8_t *buf = NULL;
+	int len = 0;
+	int idx = 0;
+	func();
+	memset(&arg, 0, sizeof(VirtIOArg));
+	arg.cmd 	= VIRTIO_CUBLAS_DAXPY;
+	arg.src 	= (uint64_t)x;
+	arg.srcSize = (uint32_t)n;
+	arg.dst 	= (uint64_t)y;
+	arg.src2 	= (uint64_t)handle;
 	arg.srcSize2 	= (uint32_t)incx;
 	arg.dstSize = (uint32_t)incy;
-	send_to_device(VIRTIO_IOC_CUBLAS_DDOT, &arg);
-	*result 	= (double)arg.flag;
+	len = sizeof(double);
+	buf = malloc(len);
+	memcpy(buf+idx, alpha, sizeof(double));
+	arg.param 		= (uint64_t)buf;
+	arg.paramSize 	= (uint32_t)len;
+	send_to_device(VIRTIO_IOC_CUBLAS_DAXPY, &arg);
+	free(buf);
 	return (cublasStatus_t)arg.cmd;
 }
 
@@ -1639,15 +1681,24 @@ CUBLASAPI cublasStatus_t cublasSscal_v2(cublasHandle_t handle,
                                          int incx)
 {
 	VirtIOArg arg;
+	uint8_t *buf = NULL;
+	int len = 0;
+	int idx = 0;
+
 	func();
 	memset(&arg, 0, sizeof(VirtIOArg));
 	arg.cmd 	= VIRTIO_CUBLAS_SSCAL;
 	arg.src 	= (uint64_t)x;
 	arg.srcSize = (uint32_t)n;
-	arg.dst 	= (uint64_t)handle;
-	arg.dstSize = (uint32_t)incx;
-	arg.param 	= (uint64_t)alpha;
+	arg.src2 	= (uint64_t)handle;
+	arg.srcSize2 = (uint32_t)incx;
+	len = sizeof(float);
+	buf = malloc(len);
+	memcpy(buf+idx, alpha, sizeof(float));
+	arg.param 		= (uint64_t)buf;
+	arg.paramSize 	= (uint32_t)len;
 	send_to_device(VIRTIO_IOC_CUBLAS_SSCAL, &arg);
+	free(buf);
 	return (cublasStatus_t)arg.cmd;
 }
     
@@ -1658,15 +1709,24 @@ CUBLASAPI cublasStatus_t cublasDscal_v2(cublasHandle_t handle,
                                          int incx)
 {
 	VirtIOArg arg;
+	uint8_t *buf = NULL;
+	int len = 0;
+	int idx = 0;
+
 	func();
 	memset(&arg, 0, sizeof(VirtIOArg));
 	arg.cmd 	= VIRTIO_CUBLAS_DSCAL;
 	arg.src 	= (uint64_t)x;
 	arg.srcSize = (uint32_t)n;
-	arg.dst 	= (uint64_t)handle;
-	arg.dstSize = (uint32_t)incx;
-	arg.param 	= (uint64_t)alpha;
+	arg.src2 	= (uint64_t)handle;
+	arg.srcSize2 = (uint32_t)incx;
+	len = sizeof(double);
+	buf = malloc(len);
+	memcpy(buf+idx, alpha, sizeof(double));
+	arg.param 		= (uint64_t)buf;
+	arg.paramSize 	= (uint32_t)len;
 	send_to_device(VIRTIO_IOC_CUBLAS_DSCAL, &arg);
+	free(buf);
 	return (cublasStatus_t)arg.cmd;
 }
 
@@ -1699,11 +1759,9 @@ CUBLASAPI cublasStatus_t cublasSgemv_v2 (cublasHandle_t handle,
 	arg.srcSize2 = n;
 	arg.dst 	= (uint64_t)y;
 	arg.dstSize = m;
-	arg.flag 	= *alpha;
-	arg.param2 	= *beta;
 
 	len = int_size * 3 + sizeof(cublasHandle_t) + 
-			sizeof(cublasOperation_t);
+			sizeof(cublasOperation_t) + sizeof(float)*2;
 	buf = malloc(len);
 	memcpy(buf+idx, &handle, sizeof(cublasHandle_t));
 	idx += sizeof(cublasHandle_t);
@@ -1714,9 +1772,14 @@ CUBLASAPI cublasStatus_t cublasSgemv_v2 (cublasHandle_t handle,
 	memcpy(buf+idx, &incx, int_size);
 	idx += int_size;
 	memcpy(buf+idx, &incy, int_size);
+	idx += int_size;
+	memcpy(buf+idx, alpha, sizeof(float));
+	idx += sizeof(float);
+	memcpy(buf+idx, beta, sizeof(float));
 	arg.param 		= (uint64_t)buf;
-	arg.paramSize 	= len;
+	arg.paramSize 	= (uint32_t)len;
 	send_to_device(VIRTIO_IOC_CUBLAS_SGEMV, &arg);
+	free(buf);
 	return (cublasStatus_t)arg.cmd;
 }
  
@@ -1748,11 +1811,8 @@ CUBLASAPI cublasStatus_t cublasDgemv_v2 (cublasHandle_t handle,
 	arg.srcSize2 = (uint32_t)n;
 	arg.dst 	= (uint64_t)y;
 	arg.dstSize = (uint32_t)m;
-	arg.flag 	= (uint64_t)(*alpha);
-	arg.param2 	= (uint64_t)(*beta);
-
 	len = int_size * 3 + sizeof(cublasHandle_t) + 
-			sizeof(cublasOperation_t);
+			sizeof(cublasOperation_t)+ sizeof(double)*2;
 	buf = malloc(len);
 	memcpy(buf+idx, &handle, sizeof(cublasHandle_t));
 	idx += sizeof(cublasHandle_t);
@@ -1763,9 +1823,14 @@ CUBLASAPI cublasStatus_t cublasDgemv_v2 (cublasHandle_t handle,
 	memcpy(buf+idx, &incx, int_size);
 	idx += int_size;
 	memcpy(buf+idx, &incy, int_size);
+	idx += int_size;
+	memcpy(buf+idx, alpha, sizeof(double));
+	idx += sizeof(double);
+	memcpy(buf+idx, beta, sizeof(double));
 	arg.param 		= (uint64_t)buf;
 	arg.paramSize 	= len;
 	send_to_device(VIRTIO_IOC_CUBLAS_DGEMV, &arg);
+	free(buf);
 	return (cublasStatus_t)arg.cmd;
 }
 
@@ -1827,6 +1892,7 @@ CUBLASAPI cublasStatus_t cublasSgemm_v2 (cublasHandle_t handle,
 	arg.param 		= (uint64_t)buf;
 	arg.paramSize 	= len;
 	send_to_device(VIRTIO_IOC_CUBLAS_SGEMM, &arg);
+	free(buf);
 	return (cublasStatus_t)arg.cmd;
 }
 
@@ -1887,6 +1953,72 @@ CUBLASAPI cublasStatus_t cublasDgemm_v2 (cublasHandle_t handle,
 	arg.param 		= (uint64_t)buf;
 	arg.paramSize 	= len;
 	send_to_device(VIRTIO_IOC_CUBLAS_DGEMM, &arg);
+	free(buf);
 	return (cublasStatus_t)arg.cmd;
 }
 
+cublasStatus_t cublasSetMatrix (int rows, int cols, int elemSize, 
+                                 const void *A, int lda, void *B, 
+                                 int ldb)
+{
+	VirtIOArg arg;
+	uint8_t *buf = NULL;
+	int len = 0;
+	int idx = 0;
+	int int_size = sizeof(int);
+	func();
+	memset(&arg, 0, sizeof(VirtIOArg));
+	arg.cmd 	= VIRTIO_CUBLAS_SETMATRIX;
+	arg.src 	= (uint64_t)A;
+	arg.srcSize = (uint32_t)(rows * cols * elemSize);
+	arg.dst 	= (uint64_t)B;
+	len = int_size * 5;
+	buf = malloc(len);
+	memcpy(buf+idx, &rows, int_size);
+	idx += int_size;
+	memcpy(buf+idx, &cols, int_size);
+	idx += int_size;
+	memcpy(buf+idx, &elemSize, int_size);
+	idx += int_size;
+	memcpy(buf+idx, &lda, int_size);
+	idx += int_size;
+	memcpy(buf+idx, &ldb, int_size);
+	arg.param 		= (uint64_t)buf;
+	arg.paramSize 	= len;
+	send_to_device(VIRTIO_IOC_CUBLAS_SETMATRIX, &arg);
+	free(buf);
+	return (cublasStatus_t)arg.cmd;
+}
+
+cublasStatus_t cublasGetMatrix (int rows, int cols, int elemSize, 
+                                 const void *A, int lda, void *B,
+                                 int ldb)
+{
+	VirtIOArg arg;
+	uint8_t *buf = NULL;
+	int len = 0;
+	int idx = 0;
+	int int_size = sizeof(int);
+	func();
+	memset(&arg, 0, sizeof(VirtIOArg));
+	arg.cmd 	= VIRTIO_CUBLAS_GETMATRIX;
+	arg.src 	= (uint64_t)A;
+	arg.srcSize = (uint32_t)(rows * cols * elemSize);
+	arg.dst 	= (uint64_t)B;
+	len = int_size * 5;
+	buf = malloc(len);
+	memcpy(buf+idx, &rows, int_size);
+	idx += int_size;
+	memcpy(buf+idx, &cols, int_size);
+	idx += int_size;
+	memcpy(buf+idx, &elemSize, int_size);
+	idx += int_size;
+	memcpy(buf+idx, &lda, int_size);
+	idx += int_size;
+	memcpy(buf+idx, &ldb, int_size);
+	arg.param 		= (uint64_t)buf;
+	arg.paramSize 	= len;
+	send_to_device(VIRTIO_IOC_CUBLAS_GETMATRIX, &arg);
+	free(buf);
+	return (cublasStatus_t)arg.cmd;
+}
