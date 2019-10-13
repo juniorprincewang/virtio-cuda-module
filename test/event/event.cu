@@ -5,7 +5,7 @@ __global__ void kernel(float *g_data, float value)
 {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     g_data[idx] = g_data[idx] + value;
-    printf("%f+g_data[%d]=%f\n", value, idx, g_data[idx]);
+    // printf("%f+g_data[%d]=%f\n", value, idx, g_data[idx]);
 }
 
 int checkResult(float *data, const int n, const float x)
@@ -76,7 +76,7 @@ int main()
     printf("Time for sequential transfer and execute (ms): %f\n", ms);
 
     bool bFinalResults = (bool) checkResult(h_a, num, value);
-    printf("result:%d\n", bFinalResults);
+    printf("result:%s\n", bFinalResults? "PASS":"FAILED");
     // end
     free(h_a);
     cudaFree(d_a);
@@ -86,5 +86,14 @@ int main()
     cudaEventDestroy(dummyEvent);
     for (int i = 0; i < nStreams; ++i)
         cudaStreamDestroy(stream[i]);
+
+    cudaEvent_t events[8];
+    for (int i = 0; i < 8; ++i)
+        cudaEventCreate(&events[i]);
+    
+    for (int i = 7; i >= 5; --i)
+        cudaEventDestroy(events[i]);
+    for (int i = 0; i < 5; ++i)
+        cudaEventDestroy(events[i]);
     return 0;
 }

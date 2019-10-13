@@ -1,5 +1,7 @@
 #include <cuda.h>
 #include <stdio.h>
+
+
 __global__ void kernel(int *a, int *b, int c)
 {
 	int tx = threadIdx.x;
@@ -17,9 +19,7 @@ int main()
 	int big_data_size=(1<<22)+(1<<12);
 	dim3 threads(10,1);
 	dim3 blocks(1,1);
-	//test();
-
-	nelem = 1048576;
-    bytes = nelem*sizeof(float);
+	cudaMallocHost(4);
+	
 	return 0;
 }

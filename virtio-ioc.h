@@ -2,7 +2,8 @@
 #define VIRTCR_IOC_H
 
 // #define VIRTIO_CUDA_DEBUG
-#define KMALLOC_SHIFT 22 // 4MB
+// #define KMALLOC_SHIFT 22 // 4MB
+#define KMALLOC_SHIFT 14
 #define KMALLOC_SIZE (1UL<<KMALLOC_SHIFT)
 
 

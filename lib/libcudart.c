@@ -623,6 +623,8 @@ cudaError_t cudaMemcpy(void *dst, const void *src, size_t count, enum cudaMemcpy
 	if (kind <0 || kind >4) {
 		return cudaErrorInvalidMemcpyDirection;
 	}
+	if(!dst || !src || count<=0)
+		return cudaSuccess;
 	memset(&arg, 0, sizeof(VirtIOArg));
 	arg.cmd 	= VIRTIO_CUDA_MEMCPY;
 	arg.flag 	= kind;
@@ -644,6 +646,8 @@ cudaError_t cudaMemcpyToSymbol(	const void *symbol, const void *src,
 {
 	VirtIOArg arg;
 	func();
+	if(!symbol || !src || count<=0)
+		return cudaSuccess;
 	assert(kind == cudaMemcpyHostToDevice);
 	memset(&arg, 0, sizeof(VirtIOArg));
 	arg.cmd 	= VIRTIO_CUDA_MEMCPYTOSYMBOL;
@@ -664,6 +668,8 @@ cudaError_t cudaMemcpyFromSymbol(	void *dst, const void *symbol,
 {
 	VirtIOArg arg;
 	func();
+	if(!dst || !symbol || count<=0)
+		return cudaSuccess;
 	assert(kind == cudaMemcpyDeviceToHost);
 	memset(&arg, 0, sizeof(VirtIOArg));
 	arg.cmd 	= VIRTIO_CUDA_MEMCPYFROMSYMBOL;
@@ -682,6 +688,8 @@ cudaError_t cudaMemset(void *dst, int value, size_t count)
 {
 	VirtIOArg arg;
 	func();
+	if(!dst || count<=0)
+		return cudaSuccess;
 	memset(&arg, 0, sizeof(VirtIOArg));
 	arg.cmd 	= VIRTIO_CUDA_MEMSET;
 	arg.dst 	= (uint64_t)dst;
@@ -706,6 +714,8 @@ cudaError_t cudaMemcpyAsync(
 		debug("direction is %d\n", kind);
 		return cudaErrorInvalidMemcpyDirection;
 	}
+	if(!dst || !src || count<=0)
+		return cudaSuccess;
 	memset(&arg, 0, sizeof(VirtIOArg));
 	arg.cmd 	= VIRTIO_CUDA_MEMCPY_ASYNC;
 	arg.flag 	= kind;
@@ -741,6 +751,8 @@ cudaError_t cudaHostRegister(void *ptr, size_t size, unsigned int flags)
 {
 	VirtIOArg arg;
 	func();
+	if(size<=0)
+		return cudaSuccess;
 	memset(&arg, 0, sizeof(VirtIOArg));
 	arg.cmd 	= VIRTIO_CUDA_HOSTREGISTER;
 	arg.tid 	= syscall(SYS_gettid);
@@ -754,17 +766,14 @@ cudaError_t cudaHostRegister(void *ptr, size_t size, unsigned int flags)
 cudaError_t cudaHostUnregister(void *ptr)
 {
 	VirtIOArg arg;
-	// BlockHeader* blk = NULL;
 	func();
-	// blk = get_block_by_ptr(ptr);
- //    if(!blk) {
-	// 	return cudaErrorInitializationError;
- //    }
+	if(!ptr)
+		return cudaSuccess;
 	memset(&arg, 0, sizeof(VirtIOArg));
 	arg.cmd = VIRTIO_CUDA_HOSTUNREGISTER;
 	arg.tid = syscall(SYS_gettid);
 	arg.src = (uint64_t)ptr;
-	arg.srcSize = 0 ; //blk->data_size;
+	arg.srcSize = 0;
 	send_to_device(VIRTIO_IOC_HOSTUNREGISTER, &arg);
 	return (cudaError_t)arg.cmd;
 }
@@ -772,13 +781,16 @@ cudaError_t cudaHostUnregister(void *ptr)
 cudaError_t cudaHostAlloc(void **pHost, size_t size, unsigned int flags)
 {
 	func();
-	*pHost = __mmalloc(size);
+	*pHost = malloc(size);
+	if(size <=0)
+		return cudaSuccess;
 	return cudaHostRegister(*pHost, size, flags);
 }
 
 cudaError_t cudaMallocHost(void **ptr, size_t size)
 {
 	func();
+	debug("allocating size 0x%lx\n", size);
 	return cudaHostAlloc(ptr, size, cudaHostAllocDefault);
 }
 
@@ -786,10 +798,12 @@ cudaError_t cudaFreeHost(void *ptr)
 {
 	BlockHeader* blk = NULL;
 	func();
+	if(!ptr)
+		return cudaSuccess;
 	cudaError_t err = cudaHostUnregister(ptr);
 	blk = get_block_by_ptr(ptr);
     if(!blk) {
-		return cudaErrorInitializationError;
+		return err;
     }
     debug("blk->address   =0x%lx\n",(uint64_t)blk->address);
 	debug("blk->total_size=0x%lx\n",(uint64_t)blk->total_size);
@@ -803,6 +817,8 @@ cudaError_t cudaFree(void *devPtr)
 {
 	VirtIOArg arg;
 	func();
+	if(!devPtr)
+		return cudaSuccess;
 	memset(&arg, 0, sizeof(VirtIOArg));
 	arg.cmd 	= VIRTIO_CUDA_FREE;
 	arg.src 	= (uint64_t)devPtr;
@@ -958,7 +974,7 @@ cudaError_t cudaEventCreate(cudaEvent_t *event)
 	arg.cmd = VIRTIO_CUDA_EVENTCREATE;
 	arg.tid = syscall(SYS_gettid);
 	send_to_device(VIRTIO_IOC_EVENTCREATE, &arg);
-	 *event = (void*)(arg.flag);
+	 *event = (cudaEvent_t)arg.flag;
 	return (cudaError_t)arg.cmd;	
 }
 
@@ -968,10 +984,10 @@ cudaError_t cudaEventCreateWithFlags(cudaEvent_t *event, unsigned int flags)
 	func();
 	memset(&arg, 0, sizeof(VirtIOArg));
 	arg.cmd 	= VIRTIO_CUDA_EVENTCREATEWITHFLAGS;
-	arg.flag 	= flags;
+	arg.flag 	= (uint64_t)flags;
 	arg.tid 	= syscall(SYS_gettid);
 	send_to_device(VIRTIO_IOC_EVENTCREATEWITHFLAGS, &arg);
-	 *event 	= (void*)(arg.dst);
+	 *event 	= (cudaEvent_t)arg.dst;
 	return (cudaError_t)arg.cmd;	
 }
 
@@ -1035,8 +1051,10 @@ cudaError_t cudaEventElapsedTime(float *ms, cudaEvent_t start, cudaEvent_t end)
 	arg.tid = syscall(SYS_gettid);
 	arg.src = (uint64_t)start;
 	arg.dst = (uint64_t)end;
+	arg.param 		= (uint64_t)ms;
+	arg.paramSize 	= sizeof(float);
 	send_to_device(VIRTIO_IOC_EVENTELAPSEDTIME, &arg);
-	*ms 	= (float)arg.flag;
+	debug("elapsed time is %g\n", *ms);
 	return (cudaError_t)arg.cmd;	
 }
 
