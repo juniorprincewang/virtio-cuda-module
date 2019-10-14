@@ -4,6 +4,7 @@
 #include <cuda_runtime.h>
 #include <fatBinaryCtl.h>
 #include <cublas_v2.h>
+#include <curand.h>
 
 #include <string.h> // memset
 #include <stdio.h>
@@ -2051,4 +2052,168 @@ cublasStatus_t cublasGetMatrix (int rows, int cols, int elemSize,
 	send_to_device(VIRTIO_IOC_CUBLAS_GETMATRIX, &arg);
 	free(buf);
 	return (cublasStatus_t)arg.cmd;
+}
+/*****************************************************************************/
+/******CURAND***********/
+/*****************************************************************************/
+
+curandStatus_t CURANDAPI 
+curandCreateGenerator(curandGenerator_t *generator, curandRngType_t rng_type)
+{
+	VirtIOArg arg;
+	func();
+	memset(&arg, 0, sizeof(VirtIOArg));
+	debug("sizeof(curandGenerator_t) = %lx\n", sizeof(curandGenerator_t));
+	arg.cmd 	= VIRTIO_CURAND_CREATEGENERATOR;
+	arg.dst 	= (uint64_t)rng_type;
+	send_to_device(VIRTIO_IOC_CURAND_CREATEGENERATOR, &arg);
+	*generator 	= (curandGenerator_t)arg.flag;
+	return (curandStatus_t)arg.cmd;
+}
+
+curandStatus_t CURANDAPI 
+curandCreateGeneratorHost(curandGenerator_t *generator, curandRngType_t rng_type)
+{
+	VirtIOArg arg;
+	func();
+	memset(&arg, 0, sizeof(VirtIOArg));
+	arg.cmd 	= VIRTIO_CURAND_CREATEGENERATORHOST;
+	arg.dst 	= (uint64_t)rng_type;
+	send_to_device(VIRTIO_IOC_CURAND_CREATEGENERATORHOST, &arg);
+	*generator 	= (curandGenerator_t)arg.flag;
+	return (curandStatus_t)arg.cmd;
+}
+
+curandStatus_t CURANDAPI 
+curandGenerate(curandGenerator_t generator, unsigned int *outputPtr, size_t num)
+{
+	VirtIOArg arg;
+	func();
+	memset(&arg, 0, sizeof(VirtIOArg));
+	arg.cmd 	= VIRTIO_CURAND_GENERATE;
+	arg.flag 	= (uint64_t)generator;
+	arg.dst 	= (uint64_t)outputPtr;
+	arg.dstSize	= (uint32_t)num;
+	send_to_device(VIRTIO_IOC_CURAND_GENERATE, &arg);
+	return (curandStatus_t)arg.cmd;
+}
+
+curandStatus_t CURANDAPI 
+curandGenerateNormal(curandGenerator_t generator, float *outputPtr, 
+                     size_t n, float mean, float stddev)
+{
+	VirtIOArg arg;
+	uint8_t *buf = NULL;
+	int len = 0;
+	int idx = 0;
+
+	func();
+	memset(&arg, 0, sizeof(VirtIOArg));
+	arg.cmd 	= VIRTIO_CURAND_GENERATENORMAL;
+	arg.flag 	= (uint64_t)generator;
+	arg.dst 	= (uint64_t)outputPtr;
+	arg.dstSize	= (uint32_t)n;
+	len = sizeof(float)*2;
+	buf = __libc_malloc(len);
+	memcpy(buf+idx, &mean, sizeof(float));
+	idx += sizeof(float);
+	memcpy(buf+idx, &stddev, sizeof(float));
+	arg.param 		= (uint64_t)buf;
+	arg.paramSize 	= len;
+	send_to_device(VIRTIO_IOC_CURAND_GENERATENORMAL, &arg);
+	return (curandStatus_t)arg.cmd;
+}
+
+curandStatus_t CURANDAPI 
+curandGenerateNormalDouble(curandGenerator_t generator, double *outputPtr, 
+                     size_t n, double mean, double stddev)
+{
+	VirtIOArg arg;
+	uint8_t *buf = NULL;
+	int len = 0;
+	int idx = 0;
+
+	func();
+	memset(&arg, 0, sizeof(VirtIOArg));
+	arg.cmd 	= VIRTIO_CURAND_GENERATENORMALDOUBLE;
+	arg.flag 	= (uint64_t)generator;
+	arg.dst 	= (uint64_t)outputPtr;
+	arg.dstSize	= (uint32_t)n;
+	len = sizeof(double)*2;
+	buf = __libc_malloc(len);
+	memcpy(buf+idx, &mean, sizeof(double));
+	idx += sizeof(double);
+	memcpy(buf+idx, &stddev, sizeof(double));
+	arg.param 		= (uint64_t)buf;
+	arg.paramSize 	= len;
+	send_to_device(VIRTIO_IOC_CURAND_GENERATENORMALDOUBLE, &arg);
+	return (curandStatus_t)arg.cmd;
+}
+
+curandStatus_t CURANDAPI 
+curandGenerateUniform(curandGenerator_t generator, float *outputPtr, size_t num)
+{
+	VirtIOArg arg;
+	func();
+	memset(&arg, 0, sizeof(VirtIOArg));
+	arg.cmd 	= VIRTIO_CURAND_GENERATEUNIFORM;
+	arg.flag 	= (uint64_t)generator;
+	arg.dst 	= (uint64_t)outputPtr;
+	arg.dstSize	= (uint32_t)num;
+	send_to_device(VIRTIO_IOC_CURAND_GENERATEUNIFORM, &arg);
+	return (curandStatus_t)arg.cmd;
+}
+
+curandStatus_t CURANDAPI 
+curandGenerateUniformDouble(curandGenerator_t generator, double *outputPtr, size_t num)
+{
+	VirtIOArg arg;
+	func();
+	memset(&arg, 0, sizeof(VirtIOArg));
+	arg.cmd 	= VIRTIO_CURAND_GENERATEUNIFORMDOUBLE;
+	arg.flag 	= (uint64_t)generator;
+	arg.dst 	= (uint64_t)outputPtr;
+	arg.dstSize	= (uint32_t)num;
+	send_to_device(VIRTIO_IOC_CURAND_GENERATEUNIFORMDOUBLE, &arg);
+	return (curandStatus_t)arg.cmd;
+}
+
+curandStatus_t CURANDAPI 
+curandDestroyGenerator(curandGenerator_t generator)
+{
+	VirtIOArg arg;
+	func();
+	memset(&arg, 0, sizeof(VirtIOArg));
+	arg.cmd 	= VIRTIO_CURAND_DESTROYGENERATOR;
+	arg.flag 	= (uint64_t)generator;
+	send_to_device(VIRTIO_IOC_CURAND_DESTROYGENERATOR, &arg);
+	return (curandStatus_t)arg.cmd;
+}
+
+curandStatus_t CURANDAPI 
+curandSetGeneratorOffset(curandGenerator_t generator, unsigned long long offset)
+{
+	VirtIOArg arg;
+	func();
+	memset(&arg, 0, sizeof(VirtIOArg));
+	debug("sizeof(unsigned long long) = %llx\n", offset);
+	arg.cmd 	= VIRTIO_CURAND_SETGENERATOROFFSET;
+	arg.flag 	= (uint64_t)generator;
+	arg.param 	= (uint64_t)offset;
+	send_to_device(VIRTIO_IOC_CURAND_SETGENERATOROFFSET, &arg);
+	return (curandStatus_t)arg.cmd;
+}
+
+curandStatus_t CURANDAPI 
+curandSetPseudoRandomGeneratorSeed(curandGenerator_t generator, unsigned long long seed)
+{
+	VirtIOArg arg;
+	func();
+	memset(&arg, 0, sizeof(VirtIOArg));
+	debug("sizeof(unsigned long long) = %llx\n", seed);
+	arg.cmd 	= VIRTIO_CURAND_SETPSEUDORANDOMSEED;
+	arg.flag 	= (uint64_t)generator;
+	arg.param 	= (uint64_t)seed;
+	send_to_device(VIRTIO_IOC_CURAND_SETPSEUDORANDOMSEED, &arg);
+	return (curandStatus_t)arg.cmd;
 }

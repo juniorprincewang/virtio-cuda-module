@@ -18,3 +18,4 @@ NVIDIA_CUDA-9.1_Samples/6_Advanced/alignedTypes/alignedTypes
 NVIDIA_CUDA-9.1_Samples/6_Advanced/fastWalshTransform/fastWalshTransform
 NVIDIA_CUDA-9.1_Samples/6_Advanced/sortingNetworks/sortingNetworks
 NVIDIA_CUDA-9.1_Samples/7_CUDALibraries/simpleCUBLAS/simpleCUBLAS
+NVIDIA_CUDA-9.1_Samples/7_CUDALibraries/MersenneTwisterGP11213/MersenneTwisterGP11213

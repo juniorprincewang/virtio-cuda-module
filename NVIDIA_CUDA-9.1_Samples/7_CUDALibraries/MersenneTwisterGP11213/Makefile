@@ -151,7 +151,7 @@ HOST_COMPILER ?= g++
 NVCC          := $(CUDA_PATH)/bin/nvcc -ccbin $(HOST_COMPILER)
 
 # internal flags
-NVCCFLAGS   := -m${TARGET_SIZE}
+NVCCFLAGS   := -m${TARGET_SIZE} --cudart=shared
 CCFLAGS     :=
 LDFLAGS     :=
 
@@ -249,7 +249,7 @@ GENCODE_FLAGS += -gencode arch=compute_$(HIGHEST_SM),code=compute_$(HIGHEST_SM)
 endif
 endif
 
-LIBRARIES += -lcurand_static -lculibos
+# LIBRARIES += -lcurand_static -lculibos
 
 ################################################################################
 

@@ -3298,6 +3298,151 @@ int cublas_get_matrix(VirtIOArg __user *arg, struct port *port)
 	return ret;
 }
 
+static int curand_create_generator_v2(VirtIOArg __user *arg, struct port *port)
+{
+	VirtIOArg *payload;
+	int ret;
+	func();
+
+	payload = (VirtIOArg *)memdup_user(arg, arg_len);
+	if(!payload) {
+		pr_err("[ERROR] can not malloc 0x%lx memory\n", arg_len);
+		return -ENOMEM;
+	}
+	ret = send_to_virtio(port, (void*)payload, arg_len);
+	gldebug("[+] now analyse return buf\n");
+	gldebug("[+] arg->cmd = %d\n", payload->cmd);
+	put_user(payload->cmd, &arg->cmd);
+	put_user(payload->flag, &arg->flag);
+	kfree(payload);
+	return ret;
+}
+
+int curand_create_generator(VirtIOArg __user *arg, struct port *port)
+{
+	func();
+	return curand_create_generator_v2(arg, port);
+}
+
+int curand_create_generator_host(VirtIOArg __user *arg, struct port *port)
+{
+	func();
+	return curand_create_generator_v2(arg, port);
+}
+
+static int curand_send_basic(VirtIOArg __user *arg, struct port *port)
+{
+	VirtIOArg *payload;
+	int ret;
+	func();
+
+	payload = (VirtIOArg *)memdup_user(arg, arg_len);
+	if(!payload) {
+		pr_err("[ERROR] can not malloc 0x%lx memory\n", arg_len);
+		return -ENOMEM;
+	}
+	ret = send_to_virtio(port, (void*)payload, arg_len);
+	gldebug("[+] now analyse return buf\n");
+	gldebug("[+] arg->cmd = %d\n", payload->cmd);
+	put_user(payload->cmd, &arg->cmd);
+	kfree(payload);
+	return ret;
+}
+
+int curand_generate(VirtIOArg __user *arg, struct port *port)
+{
+	func();
+	return curand_send_basic(arg, port);
+}
+
+int curand_generate_normal_v2(VirtIOArg __user *arg, struct port *port)
+{
+	VirtIOArg *payload;
+	int ret;
+	void *ptr;
+	func();
+
+	payload = (VirtIOArg *)memdup_user(arg, arg_len);
+	if(!payload) {
+		pr_err("[ERROR] can not malloc 0x%lx memory\n", arg_len);
+		return -ENOMEM;
+	}
+	ptr = memdup_user((const void __user*)arg->param, arg->paramSize);
+	if(!ptr) {
+		pr_err("[ERROR] can not malloc 0x%x memory\n", arg->paramSize);
+		return -ENOMEM;
+	}
+	payload->param2 = (uint64_t)virt_to_phys(ptr);
+	ret = send_to_virtio(port, (void*)payload, arg_len);
+	gldebug("[+] now analyse return buf\n");
+	gldebug("[+] arg->cmd = %d\n", payload->cmd);
+	put_user(payload->cmd, &arg->cmd);
+	kfree(ptr);
+	kfree(payload);
+	return ret;
+}
+
+int curand_generate_normal(VirtIOArg __user *arg, struct port *port)
+{
+	func();
+	return curand_generate_normal_v2(arg, port);
+}
+
+int curand_generate_normal_double(VirtIOArg __user *arg, struct port *port)
+{
+	func();
+	return curand_generate_normal_v2(arg, port);
+}
+
+int curand_generate_uniform_v2(VirtIOArg __user *arg, struct port *port)
+{
+	VirtIOArg *payload;
+	int ret;
+	func();
+
+	payload = (VirtIOArg *)memdup_user(arg, arg_len);
+	if(!payload) {
+		pr_err("[ERROR] can not malloc 0x%lx memory\n", arg_len);
+		return -ENOMEM;
+	}
+	ret = send_to_virtio(port, (void*)payload, arg_len);
+	gldebug("[+] now analyse return buf\n");
+	gldebug("[+] arg->cmd = %d\n", payload->cmd);
+	put_user(payload->cmd, &arg->cmd);
+	kfree(payload);
+	return ret;
+}
+
+int curand_generate_uniform(VirtIOArg __user *arg, struct port *port)
+{
+	func();
+	return curand_generate_uniform_v2(arg, port);
+}
+
+int curand_generate_uniform_double(VirtIOArg __user *arg, struct port *port)
+{
+	func();
+	return curand_generate_uniform_v2(arg, port);
+}
+
+int curand_destroy_generator(VirtIOArg __user *arg, struct port *port)
+{
+	func();
+	return curand_send_basic(arg, port);
+}
+
+int curand_set_generator_offset(VirtIOArg __user *arg, struct port *port)
+{
+	func();
+	return curand_send_basic(arg, port);
+}
+
+int curand_set_pseudorandom_seed(VirtIOArg __user *arg, struct port *port)
+{
+	func();
+	return curand_send_basic(arg, port);
+}
+
 int cuda_gpa_to_hva(VirtIOArg __user *arg, struct port *port)
 {
 	void *gva, *gpa;
@@ -3554,6 +3699,36 @@ static long port_fops_ioctl(struct file *filp, unsigned int cmd, unsigned long a
 			break;
 		case VIRTIO_IOC_CUBLAS_DGEMM:
 			cublas_dgemm((VirtIOArg __user*)arg, port);
+			break;
+		case VIRTIO_IOC_CURAND_CREATEGENERATOR:
+			curand_create_generator((VirtIOArg __user*)arg, port);
+			break;
+		case VIRTIO_IOC_CURAND_CREATEGENERATORHOST:
+			curand_create_generator_host((VirtIOArg __user*)arg, port);
+			break;
+		case VIRTIO_IOC_CURAND_GENERATE:
+			curand_generate((VirtIOArg __user*)arg, port);
+			break;
+		case VIRTIO_IOC_CURAND_GENERATENORMAL:
+			curand_generate_normal((VirtIOArg __user*)arg, port);
+			break;
+		case VIRTIO_IOC_CURAND_GENERATENORMALDOUBLE:
+			curand_generate_normal_double((VirtIOArg __user*)arg, port);
+			break;
+		case VIRTIO_IOC_CURAND_GENERATEUNIFORM:
+			curand_generate_uniform((VirtIOArg __user*)arg, port);
+			break;
+		case VIRTIO_IOC_CURAND_GENERATEUNIFORMDOUBLE:
+			curand_generate_uniform_double((VirtIOArg __user*)arg, port);
+			break;
+		case VIRTIO_IOC_CURAND_DESTROYGENERATOR:
+			curand_destroy_generator((VirtIOArg __user*)arg, port);
+			break;
+		case VIRTIO_IOC_CURAND_SETGENERATOROFFSET:
+			curand_set_generator_offset((VirtIOArg __user*)arg, port);
+			break;
+		case VIRTIO_IOC_CURAND_SETPSEUDORANDOMSEED:
+			curand_set_pseudorandom_seed((VirtIOArg __user*)arg, port);
 			break;
 		default:
 			pr_err("[#] illegel VIRTIO ioctl nr = %u!\n", \
