@@ -1,6 +1,6 @@
 TARGET 	= libcudart
 CUDAPATH=/usr/local/cuda
-COMMONFLAGS=-Wall -fpic -shared -ldl -Wno-multichar -Wl,-soname,$(TARGET).so.9.1
+COMMONFLAGS=-Wall -fpic -shared -ldl -Wno-multichar -Wl,-soname,$(TARGET).so.9.1 -nostdlib
 HOMES=/home/maxwell/virtio-cuda-module/
 
 all:

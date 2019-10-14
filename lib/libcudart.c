@@ -18,6 +18,8 @@
 #include <sys/mman.h>	// mmap, PROT_READ, PROT_WRITE, MAP_SHARED
 #include <assert.h> 	// assert
 
+static int global = 0;
+
 #define DEVICE_FILE "/dev/cudaport2p%d"
 
 // #define VIRTIO_CUDA_DEBUG
@@ -142,7 +144,6 @@ static void *__mmalloc(size_t size)
 		error("mmap failed, error: %s.\n", strerror(errno));
 		return NULL;
 	}
-	// func();
 	map_offset += blocks_size;
 	BlockHeader* blk 	= (BlockHeader*)((char*)ptr + header_start_offset);
 
@@ -185,8 +186,10 @@ static void munmapctl(void *ptr)
 
 void *malloc(size_t size)
 {
-	if (size > KMALLOC_SIZE)
-		return __mmalloc(size);
+	if (global==1) {
+		if (size > KMALLOC_SIZE)
+			return __mmalloc(size);
+	}
 	return __libc_malloc(size);
 }
 
@@ -275,6 +278,7 @@ void close_vdevice()
 
 void my_init(void) {
 	debug("Init dynamic library.\n");
+	global = 1;
 	map_offset=0;
 	if(open_vdevice() < 0)
 		exit(-1);
@@ -293,7 +297,7 @@ void** __cudaRegisterFatBinary(void *fatCubin)
 
 	func();
 	
-	fatCubinHandle = (unsigned long long**)malloc(sizeof(unsigned long long*));
+	fatCubinHandle = (unsigned long long**)__libc_malloc(sizeof(unsigned long long*));
 	magic = *(unsigned int*)fatCubin;
 	if (magic == FATBINC_MAGIC)
 	{
@@ -590,6 +594,13 @@ cudaError_t cudaLaunch(const void *entry)
 	VirtIOArg arg;
 	unsigned char *para;
 	func();
+	if(!entry)
+		return cudaSuccess;
+	if (kernelConf.gridDim.x<=0 || kernelConf.gridDim.y<=0 || 
+		kernelConf.gridDim.z<=0 ||
+		kernelConf.blockDim.x<=0 || kernelConf.blockDim.y<=0 || 
+		kernelConf.blockDim.z<=0 )
+		return cudaSuccess;
 	memset(&arg, 0, sizeof(VirtIOArg));
 	arg.cmd = VIRTIO_CUDA_LAUNCH;
 	arg.src = (uint64_t)&cudaKernelPara;
@@ -781,9 +792,10 @@ cudaError_t cudaHostUnregister(void *ptr)
 cudaError_t cudaHostAlloc(void **pHost, size_t size, unsigned int flags)
 {
 	func();
-	*pHost = malloc(size);
 	if(size <=0)
 		return cudaSuccess;
+	*pHost = malloc(size);
+	debug("*pHost = %p\n", *pHost);
 	return cudaHostRegister(*pHost, size, flags);
 }
 
@@ -1422,7 +1434,7 @@ CUBLASAPI cublasStatus_t cublasSetVector (int n, int elemSize, const void *x,
 	arg.src 	= (uint64_t)x;
 	arg.dst 	= (uint64_t)devicePtr;
 	len = int_size * 4 ;
-	buf = malloc(len);
+	buf = __libc_malloc(len);
 	memcpy(buf+idx, &n, int_size);
 	idx += int_size;
 	memcpy(buf+idx, &elemSize, int_size);
@@ -1452,7 +1464,7 @@ CUBLASAPI cublasStatus_t cublasGetVector (int n, int elemSize, const void *x,
 	arg.src 	= (uint64_t)x;
 	arg.dst 	= (uint64_t)y;
 	len = int_size * 4 ;
-	buf = malloc(len);
+	buf = __libc_malloc(len);
 	memcpy(buf+idx, &n, int_size);
 	idx += int_size;
 	memcpy(buf+idx, &elemSize, int_size);
@@ -1652,7 +1664,7 @@ CUBLASAPI cublasStatus_t cublasSaxpy_v2 (cublasHandle_t handle,
 	arg.srcSize2 	= (uint32_t)incx;
 	arg.dstSize 	= (uint32_t)incy;
 	len = sizeof(float);
-	buf = malloc(len);
+	buf = __libc_malloc(len);
 	memcpy(buf+idx, alpha, sizeof(float));
 	arg.param 		= (uint64_t)buf;
 	arg.paramSize 	= (uint32_t)len;
@@ -1683,7 +1695,7 @@ CUBLASAPI cublasStatus_t cublasDaxpy_v2 (cublasHandle_t handle,
 	arg.srcSize2 	= (uint32_t)incx;
 	arg.dstSize = (uint32_t)incy;
 	len = sizeof(double);
-	buf = malloc(len);
+	buf = __libc_malloc(len);
 	memcpy(buf+idx, alpha, sizeof(double));
 	arg.param 		= (uint64_t)buf;
 	arg.paramSize 	= (uint32_t)len;
@@ -1711,7 +1723,7 @@ CUBLASAPI cublasStatus_t cublasSscal_v2(cublasHandle_t handle,
 	arg.src2 	= (uint64_t)handle;
 	arg.srcSize2 = (uint32_t)incx;
 	len = sizeof(float);
-	buf = malloc(len);
+	buf = __libc_malloc(len);
 	memcpy(buf+idx, alpha, sizeof(float));
 	arg.param 		= (uint64_t)buf;
 	arg.paramSize 	= (uint32_t)len;
@@ -1739,7 +1751,7 @@ CUBLASAPI cublasStatus_t cublasDscal_v2(cublasHandle_t handle,
 	arg.src2 	= (uint64_t)handle;
 	arg.srcSize2 = (uint32_t)incx;
 	len = sizeof(double);
-	buf = malloc(len);
+	buf = __libc_malloc(len);
 	memcpy(buf+idx, alpha, sizeof(double));
 	arg.param 		= (uint64_t)buf;
 	arg.paramSize 	= (uint32_t)len;
@@ -1780,7 +1792,7 @@ CUBLASAPI cublasStatus_t cublasSgemv_v2 (cublasHandle_t handle,
 
 	len = int_size * 3 + sizeof(cublasHandle_t) + 
 			sizeof(cublasOperation_t) + sizeof(float)*2;
-	buf = malloc(len);
+	buf = __libc_malloc(len);
 	memcpy(buf+idx, &handle, sizeof(cublasHandle_t));
 	idx += sizeof(cublasHandle_t);
 	memcpy(buf+idx, &trans, sizeof(cublasOperation_t));
@@ -1831,7 +1843,7 @@ CUBLASAPI cublasStatus_t cublasDgemv_v2 (cublasHandle_t handle,
 	arg.dstSize = (uint32_t)m;
 	len = int_size * 3 + sizeof(cublasHandle_t) + 
 			sizeof(cublasOperation_t)+ sizeof(double)*2;
-	buf = malloc(len);
+	buf = __libc_malloc(len);
 	memcpy(buf+idx, &handle, sizeof(cublasHandle_t));
 	idx += sizeof(cublasHandle_t);
 	memcpy(buf+idx, &trans, sizeof(cublasOperation_t));
@@ -1885,7 +1897,7 @@ CUBLASAPI cublasStatus_t cublasSgemm_v2 (cublasHandle_t handle,
 	arg.dstSize = m * n;
 	len = int_size * 6 + sizeof(cublasHandle_t) + 
 			sizeof(cublasOperation_t)*2 + sizeof(float)*2;
-	buf = malloc(len);
+	buf = __libc_malloc(len);
 	memcpy(buf+idx, &handle, sizeof(cublasHandle_t));
 	idx += sizeof(cublasHandle_t);
 	memcpy(buf+idx, &transa, sizeof(cublasOperation_t));
@@ -1946,7 +1958,7 @@ CUBLASAPI cublasStatus_t cublasDgemm_v2 (cublasHandle_t handle,
 	arg.dstSize = m * n;
 	len = int_size * 6 + sizeof(cublasHandle_t) + 
 			sizeof(cublasOperation_t)*2 + sizeof(double)*2;
-	buf = malloc(len);
+	buf = __libc_malloc(len);
 	memcpy(buf+idx, &handle, sizeof(cublasHandle_t));
 	idx += sizeof(cublasHandle_t);
 	memcpy(buf+idx, &transa, sizeof(cublasOperation_t));
@@ -1991,7 +2003,7 @@ cublasStatus_t cublasSetMatrix (int rows, int cols, int elemSize,
 	arg.srcSize = (uint32_t)(rows * cols * elemSize);
 	arg.dst 	= (uint64_t)B;
 	len = int_size * 5;
-	buf = malloc(len);
+	buf = __libc_malloc(len);
 	memcpy(buf+idx, &rows, int_size);
 	idx += int_size;
 	memcpy(buf+idx, &cols, int_size);
@@ -2024,7 +2036,7 @@ cublasStatus_t cublasGetMatrix (int rows, int cols, int elemSize,
 	arg.srcSize = (uint32_t)(rows * cols * elemSize);
 	arg.dst 	= (uint64_t)B;
 	len = int_size * 5;
-	buf = malloc(len);
+	buf = __libc_malloc(len);
 	memcpy(buf+idx, &rows, int_size);
 	idx += int_size;
 	memcpy(buf+idx, &cols, int_size);

@@ -61,7 +61,7 @@ int main(int argc, char *argv[])
     checkCudaErrors(cudaGetDeviceProperties(&deviceProps, devID));
     printf("CUDA device [%s]\n", deviceProps.name);
 
-    int n = 16 * 1024;// * 1024;
+    int n = 512 ;// * 1024;
     int nbytes = n * sizeof(int);
     int value = 26;
 
