@@ -87,13 +87,16 @@ int main()
     for (int i = 0; i < nStreams; ++i)
         cudaStreamDestroy(stream[i]);
 
-    cudaEvent_t events[8];
-    for (int i = 0; i < 8; ++i)
+    cudaEvent_t events[64];
+    for (int i = 0; i < 64; ++i){
+        // create
         cudaEventCreate(&events[i]);
+    }
+    for (int i = 0; i < 64; ++i){
+        cudaEventDestroy(events[i]);
+    }
     
-    for (int i = 7; i >= 5; --i)
-        cudaEventDestroy(events[i]);
-    for (int i = 0; i < 5; ++i)
-        cudaEventDestroy(events[i]);
+    printf("long long int size = %d\n", sizeof(long long int));
+    printf("size of cudaEvent_t = %d\n", sizeof(cudaEvent_t));
     return 0;
 }

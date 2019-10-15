@@ -58,6 +58,7 @@ static int device_count=0;	// virtual device number
 static int minor = 0;		// get current device
 
 extern void *__libc_malloc(size_t);
+extern void __libc_free(void *ptr);
 static unsigned int map_offset=0;
 static size_t const BLOCK_MAGIC = 0xdeadbeaf;
 
@@ -734,7 +735,7 @@ cudaError_t cudaMemcpyAsync(
 	arg.src 	= (uint64_t)src;
 	arg.srcSize = count;
 	arg.dst 	= (uint64_t)dst;
-	arg.dstSize = (uint32_t)stream;
+	arg.src2 	= (uint64_t)stream;
 	arg.param 	= (uint64_t)stream;
 	arg.tid 	= syscall(SYS_gettid);
 	send_to_device(VIRTIO_IOC_MEMCPY_ASYNC, &arg);
@@ -924,6 +925,7 @@ cudaError_t cudaStreamCreate(cudaStream_t *pStream)
 	arg.tid = syscall(SYS_gettid);
 	send_to_device(VIRTIO_IOC_STREAMCREATE, &arg);
 	*pStream = (cudaStream_t)arg.flag;
+	debug("stream = 0x%lx\n", (uint64_t)(*pStream));
 	return (cudaError_t)arg.cmd;	
 }
 
@@ -937,6 +939,7 @@ cudaError_t cudaStreamCreateWithFlags(cudaStream_t *pStream, unsigned int flags)
 	arg.tid 	= syscall(SYS_gettid);
 	send_to_device(VIRTIO_IOC_STREAMCREATEWITHFLAGS, &arg);
 	 *pStream 	= (cudaStream_t)arg.dst;
+	 debug("stream = 0x%lx\n", (uint64_t)(*pStream));
 	return (cudaError_t)arg.cmd;
 }
 
@@ -944,6 +947,9 @@ cudaError_t cudaStreamDestroy(cudaStream_t stream)
 {
 	VirtIOArg arg;
 	func();
+	debug("stream = 0x%lx\n", (uint64_t)stream);
+	if(stream==0)
+		return cudaSuccess;
 	memset(&arg, 0, sizeof(VirtIOArg));
 	arg.cmd 	= VIRTIO_CUDA_STREAMDESTROY;
 	arg.flag 	= (uint64_t)stream;
@@ -969,6 +975,8 @@ cudaError_t cudaStreamWaitEvent(cudaStream_t stream,
 {
 	VirtIOArg arg;
 	func();
+	if(event == 0)
+		return cudaSuccess;
 	assert(flags == 0);
 	memset(&arg, 0, sizeof(VirtIOArg));
 	arg.cmd = VIRTIO_CUDA_STREAMWAITEVENT;
@@ -987,8 +995,9 @@ cudaError_t cudaEventCreate(cudaEvent_t *event)
 	arg.cmd = VIRTIO_CUDA_EVENTCREATE;
 	arg.tid = syscall(SYS_gettid);
 	send_to_device(VIRTIO_IOC_EVENTCREATE, &arg);
-	 *event = (cudaEvent_t)arg.flag;
-	return (cudaError_t)arg.cmd;	
+	*event = (cudaEvent_t)arg.flag;
+	debug("create event is 0x%lx\n", (uint64_t)(*event));
+	return (cudaError_t)arg.cmd;
 }
 
 cudaError_t cudaEventCreateWithFlags(cudaEvent_t *event, unsigned int flags)
@@ -1000,7 +1009,8 @@ cudaError_t cudaEventCreateWithFlags(cudaEvent_t *event, unsigned int flags)
 	arg.flag 	= (uint64_t)flags;
 	arg.tid 	= syscall(SYS_gettid);
 	send_to_device(VIRTIO_IOC_EVENTCREATEWITHFLAGS, &arg);
-	 *event 	= (cudaEvent_t)arg.dst;
+	*event 	= (cudaEvent_t)arg.dst;
+	debug("event is 0x%lx\n", (uint64_t)(*event));
 	return (cudaError_t)arg.cmd;	
 }
 
@@ -1008,18 +1018,24 @@ cudaError_t cudaEventDestroy(cudaEvent_t event)
 {
 	VirtIOArg arg;
 	func();
+	debug("destroy event is 0x%lx\n", (uint64_t)event);
+	if (event == 0)
+		return cudaSuccess;
 	memset(&arg, 0, sizeof(VirtIOArg));
 	arg.cmd 	= VIRTIO_CUDA_EVENTDESTROY;
 	arg.flag 	= (uint64_t)event;
 	arg.tid 	= syscall(SYS_gettid);
 	send_to_device(VIRTIO_IOC_EVENTDESTROY, &arg);
-	return (cudaError_t)arg.cmd;	
+	return (cudaError_t)arg.cmd;
 }
 
 cudaError_t cudaEventRecord(cudaEvent_t event, cudaStream_t stream)
 {
 	VirtIOArg arg;
 	func();
+	debug("event is 0x%lx\n", (uint64_t)event);
+	if(event==0)
+		return cudaSuccess;
 	memset(&arg, 0, sizeof(VirtIOArg));
 	arg.cmd = VIRTIO_CUDA_EVENTRECORD;
 	debug("event  = 0x%lx\n", (uint64_t)event);
@@ -1035,6 +1051,8 @@ cudaError_t cudaEventSynchronize(cudaEvent_t event)
 {
 	VirtIOArg arg;
 	func();
+	if(event==0)
+		return cudaSuccess;
 	memset(&arg, 0, sizeof(VirtIOArg));
 	arg.cmd 	= VIRTIO_CUDA_EVENTSYNCHRONIZE;
 	arg.flag 	= (uint64_t)event;
@@ -1047,6 +1065,8 @@ cudaError_t cudaEventQuery(cudaEvent_t event)
 {
 	VirtIOArg arg;
 	func();
+	if(event==0)
+		return cudaSuccess;
 	memset(&arg, 0, sizeof(VirtIOArg));
 	arg.cmd 	= VIRTIO_CUDA_EVENTQUERY;
 	arg.flag 	= (uint64_t)event;
@@ -1059,6 +1079,8 @@ cudaError_t cudaEventElapsedTime(float *ms, cudaEvent_t start, cudaEvent_t end)
 {
 	VirtIOArg arg;
 	func();
+	if(start==0 || end==0)
+		return cudaSuccess;
 	memset(&arg, 0, sizeof(VirtIOArg));
 	arg.cmd = VIRTIO_CUDA_EVENTELAPSEDTIME;
 	arg.tid = syscall(SYS_gettid);
@@ -1446,7 +1468,7 @@ CUBLASAPI cublasStatus_t cublasSetVector (int n, int elemSize, const void *x,
 	arg.param 		= (uint64_t)buf;
 	arg.paramSize 	= len;
 	send_to_device(VIRTIO_IOC_CUBLAS_SETVECTOR, &arg);
-	free(buf);
+	__libc_free(buf);
 	return (cublasStatus_t)arg.cmd;
 }
 
@@ -1476,7 +1498,7 @@ CUBLASAPI cublasStatus_t cublasGetVector (int n, int elemSize, const void *x,
 	arg.param 		= (uint64_t)buf;
 	arg.paramSize 	= len;
 	send_to_device(VIRTIO_IOC_CUBLAS_GETVECTOR, &arg);
-	free(buf);
+	__libc_free(buf);
 	return (cublasStatus_t)arg.cmd;
 }
 
@@ -1670,7 +1692,7 @@ CUBLASAPI cublasStatus_t cublasSaxpy_v2 (cublasHandle_t handle,
 	arg.param 		= (uint64_t)buf;
 	arg.paramSize 	= (uint32_t)len;
 	send_to_device(VIRTIO_IOC_CUBLAS_SAXPY, &arg);
-	free(buf);
+	__libc_free(buf);
 	return (cublasStatus_t)arg.cmd;
 }
 
@@ -1701,7 +1723,7 @@ CUBLASAPI cublasStatus_t cublasDaxpy_v2 (cublasHandle_t handle,
 	arg.param 		= (uint64_t)buf;
 	arg.paramSize 	= (uint32_t)len;
 	send_to_device(VIRTIO_IOC_CUBLAS_DAXPY, &arg);
-	free(buf);
+	__libc_free(buf);
 	return (cublasStatus_t)arg.cmd;
 }
 
@@ -1729,7 +1751,7 @@ CUBLASAPI cublasStatus_t cublasSscal_v2(cublasHandle_t handle,
 	arg.param 		= (uint64_t)buf;
 	arg.paramSize 	= (uint32_t)len;
 	send_to_device(VIRTIO_IOC_CUBLAS_SSCAL, &arg);
-	free(buf);
+	__libc_free(buf);
 	return (cublasStatus_t)arg.cmd;
 }
     
@@ -1757,7 +1779,7 @@ CUBLASAPI cublasStatus_t cublasDscal_v2(cublasHandle_t handle,
 	arg.param 		= (uint64_t)buf;
 	arg.paramSize 	= (uint32_t)len;
 	send_to_device(VIRTIO_IOC_CUBLAS_DSCAL, &arg);
-	free(buf);
+	__libc_free(buf);
 	return (cublasStatus_t)arg.cmd;
 }
 
@@ -1810,7 +1832,7 @@ CUBLASAPI cublasStatus_t cublasSgemv_v2 (cublasHandle_t handle,
 	arg.param 		= (uint64_t)buf;
 	arg.paramSize 	= (uint32_t)len;
 	send_to_device(VIRTIO_IOC_CUBLAS_SGEMV, &arg);
-	free(buf);
+	__libc_free(buf);
 	return (cublasStatus_t)arg.cmd;
 }
  
@@ -1861,7 +1883,7 @@ CUBLASAPI cublasStatus_t cublasDgemv_v2 (cublasHandle_t handle,
 	arg.param 		= (uint64_t)buf;
 	arg.paramSize 	= len;
 	send_to_device(VIRTIO_IOC_CUBLAS_DGEMV, &arg);
-	free(buf);
+	__libc_free(buf);
 	return (cublasStatus_t)arg.cmd;
 }
 
@@ -1923,7 +1945,7 @@ CUBLASAPI cublasStatus_t cublasSgemm_v2 (cublasHandle_t handle,
 	arg.param 		= (uint64_t)buf;
 	arg.paramSize 	= len;
 	send_to_device(VIRTIO_IOC_CUBLAS_SGEMM, &arg);
-	free(buf);
+	__libc_free(buf);
 	return (cublasStatus_t)arg.cmd;
 }
 
@@ -1984,7 +2006,7 @@ CUBLASAPI cublasStatus_t cublasDgemm_v2 (cublasHandle_t handle,
 	arg.param 		= (uint64_t)buf;
 	arg.paramSize 	= len;
 	send_to_device(VIRTIO_IOC_CUBLAS_DGEMM, &arg);
-	free(buf);
+	__libc_free(buf);
 	return (cublasStatus_t)arg.cmd;
 }
 
@@ -2017,7 +2039,7 @@ cublasStatus_t cublasSetMatrix (int rows, int cols, int elemSize,
 	arg.param 		= (uint64_t)buf;
 	arg.paramSize 	= len;
 	send_to_device(VIRTIO_IOC_CUBLAS_SETMATRIX, &arg);
-	free(buf);
+	__libc_free(buf);
 	return (cublasStatus_t)arg.cmd;
 }
 
@@ -2050,7 +2072,7 @@ cublasStatus_t cublasGetMatrix (int rows, int cols, int elemSize,
 	arg.param 		= (uint64_t)buf;
 	arg.paramSize 	= len;
 	send_to_device(VIRTIO_IOC_CUBLAS_GETMATRIX, &arg);
-	free(buf);
+	__libc_free(buf);
 	return (cublasStatus_t)arg.cmd;
 }
 /*****************************************************************************/
@@ -2091,9 +2113,10 @@ curandGenerate(curandGenerator_t generator, unsigned int *outputPtr, size_t num)
 	func();
 	memset(&arg, 0, sizeof(VirtIOArg));
 	arg.cmd 	= VIRTIO_CURAND_GENERATE;
-	arg.flag 	= (uint64_t)generator;
+	arg.src 	= (uint64_t)generator;
 	arg.dst 	= (uint64_t)outputPtr;
-	arg.dstSize	= (uint32_t)num;
+	arg.dstSize	= (uint32_t)(num*sizeof(unsigned int));
+	arg.param	= (uint64_t)num;
 	send_to_device(VIRTIO_IOC_CURAND_GENERATE, &arg);
 	return (curandStatus_t)arg.cmd;
 }
@@ -2110,9 +2133,10 @@ curandGenerateNormal(curandGenerator_t generator, float *outputPtr,
 	func();
 	memset(&arg, 0, sizeof(VirtIOArg));
 	arg.cmd 	= VIRTIO_CURAND_GENERATENORMAL;
-	arg.flag 	= (uint64_t)generator;
+	arg.src 	= (uint64_t)generator;
 	arg.dst 	= (uint64_t)outputPtr;
-	arg.dstSize	= (uint32_t)n;
+	arg.dstSize	= (uint32_t)(n*sizeof(float));
+	arg.src2	= (uint64_t)n;
 	len = sizeof(float)*2;
 	buf = __libc_malloc(len);
 	memcpy(buf+idx, &mean, sizeof(float));
@@ -2121,6 +2145,7 @@ curandGenerateNormal(curandGenerator_t generator, float *outputPtr,
 	arg.param 		= (uint64_t)buf;
 	arg.paramSize 	= len;
 	send_to_device(VIRTIO_IOC_CURAND_GENERATENORMAL, &arg);
+	__libc_free(buf);
 	return (curandStatus_t)arg.cmd;
 }
 
@@ -2136,9 +2161,10 @@ curandGenerateNormalDouble(curandGenerator_t generator, double *outputPtr,
 	func();
 	memset(&arg, 0, sizeof(VirtIOArg));
 	arg.cmd 	= VIRTIO_CURAND_GENERATENORMALDOUBLE;
-	arg.flag 	= (uint64_t)generator;
+	arg.src 	= (uint64_t)generator;
 	arg.dst 	= (uint64_t)outputPtr;
-	arg.dstSize	= (uint32_t)n;
+	arg.dstSize	= (uint32_t)(n*sizeof(double));
+	arg.src2	= (uint64_t)n;
 	len = sizeof(double)*2;
 	buf = __libc_malloc(len);
 	memcpy(buf+idx, &mean, sizeof(double));
@@ -2147,6 +2173,7 @@ curandGenerateNormalDouble(curandGenerator_t generator, double *outputPtr,
 	arg.param 		= (uint64_t)buf;
 	arg.paramSize 	= len;
 	send_to_device(VIRTIO_IOC_CURAND_GENERATENORMALDOUBLE, &arg);
+	__libc_free(buf);
 	return (curandStatus_t)arg.cmd;
 }
 
@@ -2157,9 +2184,10 @@ curandGenerateUniform(curandGenerator_t generator, float *outputPtr, size_t num)
 	func();
 	memset(&arg, 0, sizeof(VirtIOArg));
 	arg.cmd 	= VIRTIO_CURAND_GENERATEUNIFORM;
-	arg.flag 	= (uint64_t)generator;
+	arg.src 	= (uint64_t)generator;
 	arg.dst 	= (uint64_t)outputPtr;
-	arg.dstSize	= (uint32_t)num;
+	arg.dstSize	= (uint32_t)(num*sizeof(float));
+	arg.param	= (uint64_t)num;
 	send_to_device(VIRTIO_IOC_CURAND_GENERATEUNIFORM, &arg);
 	return (curandStatus_t)arg.cmd;
 }
@@ -2171,9 +2199,10 @@ curandGenerateUniformDouble(curandGenerator_t generator, double *outputPtr, size
 	func();
 	memset(&arg, 0, sizeof(VirtIOArg));
 	arg.cmd 	= VIRTIO_CURAND_GENERATEUNIFORMDOUBLE;
-	arg.flag 	= (uint64_t)generator;
+	arg.src 	= (uint64_t)generator;
 	arg.dst 	= (uint64_t)outputPtr;
-	arg.dstSize	= (uint32_t)num;
+	arg.dstSize	= (uint32_t)(num*sizeof(double));
+	arg.param	= (uint64_t)num;
 	send_to_device(VIRTIO_IOC_CURAND_GENERATEUNIFORMDOUBLE, &arg);
 	return (curandStatus_t)arg.cmd;
 }
@@ -2185,7 +2214,7 @@ curandDestroyGenerator(curandGenerator_t generator)
 	func();
 	memset(&arg, 0, sizeof(VirtIOArg));
 	arg.cmd 	= VIRTIO_CURAND_DESTROYGENERATOR;
-	arg.flag 	= (uint64_t)generator;
+	arg.src 	= (uint64_t)generator;
 	send_to_device(VIRTIO_IOC_CURAND_DESTROYGENERATOR, &arg);
 	return (curandStatus_t)arg.cmd;
 }
@@ -2196,9 +2225,8 @@ curandSetGeneratorOffset(curandGenerator_t generator, unsigned long long offset)
 	VirtIOArg arg;
 	func();
 	memset(&arg, 0, sizeof(VirtIOArg));
-	debug("sizeof(unsigned long long) = %llx\n", offset);
 	arg.cmd 	= VIRTIO_CURAND_SETGENERATOROFFSET;
-	arg.flag 	= (uint64_t)generator;
+	arg.src 	= (uint64_t)generator;
 	arg.param 	= (uint64_t)offset;
 	send_to_device(VIRTIO_IOC_CURAND_SETGENERATOROFFSET, &arg);
 	return (curandStatus_t)arg.cmd;
@@ -2210,9 +2238,8 @@ curandSetPseudoRandomGeneratorSeed(curandGenerator_t generator, unsigned long lo
 	VirtIOArg arg;
 	func();
 	memset(&arg, 0, sizeof(VirtIOArg));
-	debug("sizeof(unsigned long long) = %llx\n", seed);
 	arg.cmd 	= VIRTIO_CURAND_SETPSEUDORANDOMSEED;
-	arg.flag 	= (uint64_t)generator;
+	arg.src 	= (uint64_t)generator;
 	arg.param 	= (uint64_t)seed;
 	send_to_device(VIRTIO_IOC_CURAND_SETPSEUDORANDOMSEED, &arg);
 	return (curandStatus_t)arg.cmd;
