@@ -1,14 +1,16 @@
 # virtio-cuda-module
-This is the para-virtualized front driver of cuda-supported qemu and test case. 
+This is the para-virtualized front driver of cuda-supported qemu and test case.   
 
 The user runtime wrappered library in VM (guest OS) provides CUDA runtime access, interfaces of memory allocation, CUDA commands, and passes cmds to the driver.
 
-The front-end driver is responsible for the memory management, data movement, analyzing the ioctl cmds from the customed library, and passing the cmds by the control channel.
+The front-end driver is responsible for the memory management, transferring data, analyzing the ioctl cmds from the customed library, and passing the cmds by the control channel.
 
 
 ## Installation
 
 ### Prerequisites
+
+The our experiment environment is as follows:  
 
 #### Host
 
@@ -84,7 +86,9 @@ hyperfine 'LD_PRELOAD=\path\to\libvcuda.so ./vectorAdd'
 By default, Hyperfine will perform at least 10 benchmarking runs. To change this, you can use the *-m/--min-runs* option or *-M/--max-runs*.
 
 
-# supported CUDA runtime API 
+# supported API 
+
+## CUDA Runtime API
 
 In our current version, we implement necessary CUDA runtime APIs. These CUDA 
 runtime API are shown as below:  
@@ -142,8 +146,11 @@ runtime API are shown as below:
     <td class="tg-3we0">cudaDeviceReset</td>
   </tr>
   <tr>
-    <td class="tg-yw4l" rowspan="3">Stream Management</td>
+    <td class="tg-yw4l" rowspan="5">Stream Management</td>
     <td class="tg-3we0">cudaStreamCreate</td>
+  </tr>
+  <tr>
+    <td class="tg-3we0">cudaStreamCreateWithFlags</td>
   </tr>
   <tr>
     <td class="tg-3we0">cudaStreamDestroy</td>
@@ -152,7 +159,10 @@ runtime API are shown as below:
     <td class="tg-3we0">cudaStreamSynchronize</td>
   </tr>
   <tr>
-    <td class="tg-yw4l" rowspan="6">Event Management</td>
+    <td class="tg-3we0">cudaStreamWaitEvent</td>
+  </tr>
+  <tr>
+    <td class="tg-yw4l" rowspan="7">Event Management</td>
     <td class="tg-3we0">cudaEventCreate</td>
   </tr>
   <tr>
@@ -171,8 +181,14 @@ runtime API are shown as below:
     <td class="tg-3we0">cudaEventDestroy</td>
   </tr>
   <tr>
-    <td class="tg-yw4l">Error Handling</td>
+    <td class="tg-3we0">cudaEventQuery</td>
+  </tr>
+  <tr>
+    <td class="tg-yw4l" rowspan="2">Error Handling</td>
     <td class="tg-3we0">cudaGetLastError</td>
+  </tr>
+  <tr>
+    <td class="tg-3we0">cudaGetErrorString</td>
   </tr>
   <tr>
     <td class="tg-yw4l" rowspan="7">Zero-copy</td>
@@ -225,5 +241,124 @@ runtime API are shown as below:
   </tr>
 </table>
 
+## CUBLAS API & CURAND API
 
-Last but not least, thanks [qcuda](https://github.com/coldfunction/qCUDA) for inspiring.
+To support [Caffe](https://github.com/BVLC/caffe.git), we implement CUBLAS & CURAND API in *libcudart.so*.  
+
+<table class="tg">
+  <tr>
+    <th class="tg-yw4l">Classification</th>
+    <th class="tg-yw4l">supported API</th>
+  </tr>
+  <tr>
+    <td class="tg-yw4l" rowspan="22">CUBLAS API</td>
+    <td class="tg-3we0">cublasCreate</td>
+  </tr>
+  <tr>
+    <td class="tg-3we0">cublasDestroy</td>
+  </tr>
+  <tr>
+    <td class="tg-3we0">cublasSetVector</td>
+  </tr>
+  <tr>
+    <td class="tg-3we0">cublasGetVector</td>
+  </tr>
+  <tr>
+    <td class="tg-3we0">cublasSetStream</td>
+  </tr>
+  <tr>
+    <td class="tg-3we0">cublasGetStream</td>
+  </tr>
+  <tr>
+    <td class="tg-3we0">cublasSasum</td>
+  </tr>
+  <tr>
+    <td class="tg-3we0">cublasDasum</td>
+  </tr>
+  <tr>
+    <td class="tg-3we0">cublasScopy</td>
+  </tr>
+  <tr>
+    <td class="tg-3we0">cublasDcopy</td>
+  </tr>
+  <tr>
+    <td class="tg-3we0">cublasSdot</td>
+  </tr>
+  <tr>
+    <td class="tg-3we0">cublasDdot</td>
+  </tr>
+  <tr>
+    <td class="tg-3we0">cublasSaxpy</td>
+  </tr>
+  <tr>
+    <td class="tg-3we0">cublasDaxpy</td>
+  </tr>
+  <tr>
+    <td class="tg-3we0">cublasSscal</td>
+  </tr>
+  <tr>
+    <td class="tg-3we0">cublasDscal</td>
+  </tr>
+  <tr>
+    <td class="tg-3we0">cublasSgemv</td>
+  </tr>
+  <tr>
+    <td class="tg-3we0">cublasDgemv</td>
+  </tr>
+  <tr>
+    <td class="tg-3we0">cublasSgemm</td>
+  </tr>
+  <tr>
+    <td class="tg-3we0">cublasDgemm</td>
+  </tr>
+  <tr>
+    <td class="tg-3we0">cublasSetMatrix</td>
+  </tr>
+  <tr>
+    <td class="tg-3we0">cublasGetMatrix</td>
+  </tr>
+  <tr>
+    <td class="tg-yw4l" rowspan="10">CURAND API</td>
+    <td class="tg-3we0">curandCreateGenerator</td>
+  </tr>
+  <tr>
+    <td class="tg-3we0">curandCreateGeneratorHost</td>
+  </tr>
+  <tr>
+    <td class="tg-3we0">curandGenerate</td>
+  </tr>
+  <tr>
+    <td class="tg-3we0">curandGenerateUniform</td>
+  </tr>
+  <tr>
+    <td class="tg-3we0">curandGenerateUniformDouble</td>
+  </tr>
+  <tr>
+    <td class="tg-3we0">curandGenerateNormal</td>
+  </tr>
+  <tr>
+    <td class="tg-3we0">curandGenerateNormalDouble</td>
+  </tr>
+  <tr>
+    <td class="tg-3we0">curandDestroyGenerator</td>
+  </tr>
+  <tr>
+    <td class="tg-3we0">curandSetGeneratorOffset</td>
+  </tr>
+  <tr>
+    <td class="tg-3we0">curandSetPseudoRandomGeneratorSeed</td>
+  </tr>
+</table>
+
+
+# Supported Software
+
++ part of NVIDIA_CUDA-9.1_Samples  
++ [Rodinia benchmark ](https://github.com/yuhc/gpu-rodinia.git)
++ [Caffe: a fast open framework for deep learning.](https://github.com/BVLC/caffe.git)
+
+
+
+
+Last but not least, thanks [qcuda](https://github.com/coldfunction/qCUDA) for inspiring.  
+Also, what we use for message channels is [chan: Pure C implementation of Go channels. ](https://github.com/tylertreat/chan.gitPure C implementation of Go channels. )
