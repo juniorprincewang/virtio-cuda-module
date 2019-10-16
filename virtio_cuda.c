@@ -1249,8 +1249,9 @@ int send_to_virtio(struct port *port, void *payload, size_t count)
 	long recv = 0;
 	size_t len;
 	void *data;
+	// unsigned long flags;
 
-	len = min((size_t)(32 * 1024), count);
+	len = min((size_t)1024, count);
 	gldebug("[+] sending %lu buffer, actual %lu buffer to host\n", count, len);
 
 	data = kmemdup(payload, len, GFP_ATOMIC);
@@ -1269,8 +1270,9 @@ int send_to_virtio(struct port *port, void *payload, size_t count)
 
 	//now read data from host
 	/* Port is hot-unplugged. */
-	if (!port->guest_connected)
+	if (!port->guest_connected){
 		return -ENODEV;
+	}
 
 	if (!port_has_data(port)) {
 		/*
@@ -1278,15 +1280,18 @@ int send_to_virtio(struct port *port, void *payload, size_t count)
 		 * case of list_empty; this tells the userspace app
 		 * that there's no connection
 		 */
-		if (!port->host_connected)
+		if (!port->host_connected){
 			return -ENODEV;
+		}
 		err = wait_event_freezable(port->waitqueue, !will_read_block(port));
-		if (ret < 0)
+		if (ret < 0){
 			return -ENODEV;
+		}
 	}
 	// Port got hot-unplugged while we were waiting above. 
-	if (!port->guest_connected)
+	if (!port->guest_connected){
 		return -ENODEV;
+	}
 	/*
 	 * We could've received a disconnection message while we were
 	 * waiting for more data.
@@ -1297,12 +1302,12 @@ int send_to_virtio(struct port *port, void *payload, size_t count)
 	 * really want to give off whatever data we have and only then
 	 * check for host_connected.
 	 */
-	if (!port_has_data(port) && !port->host_connected)
+	if (!port_has_data(port) && !port->host_connected){
 		return -ENODEV;
+	}
 	// recv = fill_readbuf(port, out , count, false);
 	recv = fill_readbuf(port, payload, count, false);
 	gldebug("receiving %zu data\n", recv);
-
 	return 0;
 }
 
@@ -1976,8 +1981,9 @@ int cuda_memcpy(VirtIOArg __user *arg, struct port *port)
 	unsigned long *phys_addr_pack=NULL;
 	func();
 	gldebug("[+] arg->cmd = %d\n", arg->cmd);
-	gldebug("src=0x%llx, srcSize=0x%x, dst=0x%llx, dstSize=0x%x, kind=%llu\n",
-			arg->src, arg->srcSize,
+	gldebug("tid = %d, src=0x%llx, srcSize=0x%x, "
+			"dst=0x%llx, dstSize=0x%x, kind=%llu\n",
+			arg->tid, arg->src, arg->srcSize,
 			arg->dst, arg->dstSize, arg->flag);
 	if(get_user(src_size, &arg->srcSize)){
 		pr_err("[ERROR] can not get src_size\n");	
@@ -2516,11 +2522,10 @@ int cuda_event_create(VirtIOArg __user *arg, struct port *port)
 		pr_err("[ERROR] can not malloc 0x%lx memory\n", arg_len);
 		return -ENOMEM;
 	}
-
 	ret = send_to_virtio(port, (void*)payload, arg_len);
 	gldebug("[+] now analyse return buf\n");
 	gldebug("[+] arg->cmd = %d\n", payload->cmd);
-	pr_err("[+] arg->flag = %lld\n", payload->flag);
+	gldebug("[+]tid = %d, arg->flag = %lld\n", payload->tid, payload->flag);
 	put_user(payload->cmd, &arg->cmd);
 	put_user(payload->flag, &arg->flag);
 	kfree(payload);

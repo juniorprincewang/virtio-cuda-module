@@ -12,12 +12,13 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>	//open
-#include <unistd.h>	// close
+#include <unistd.h>	// close, syscall
 #include <sys/syscall.h> // SYS_gettid
 #include "../virtio-ioc.h"
 #include <errno.h>	// errno
 #include <sys/mman.h>	// mmap, PROT_READ, PROT_WRITE, MAP_SHARED
 #include <assert.h> 	// assert
+#include <pthread.h>
 
 static int global = 0;
 
@@ -73,15 +74,18 @@ typedef struct block_header
 __attribute__ ((constructor)) void my_init(void);
 __attribute__ ((destructor)) void my_fini(void);
 
+static pthread_spinlock_t lock;
 
 /*
  * ioctl
 */
 void send_to_device(int cmd, void *arg)
 {
+	pthread_spin_lock(&lock);
 	if(ioctl(fd, cmd, arg) == -1){
 		error("ioctl when cmd is %d\n", _IOC_NR(cmd));
 	}
+	pthread_spin_unlock(&lock);
 }
 
 BlockHeader* get_block_by_ptr(void* p)
@@ -284,6 +288,7 @@ void my_init(void) {
 	map_offset=0;
 	if(open_vdevice() < 0)
 		exit(-1);
+	pthread_spin_init(&lock, 0);
 }
 
 void my_fini(void) {
@@ -646,6 +651,7 @@ cudaError_t cudaMemcpy(void *dst, const void *src, size_t count, enum cudaMemcpy
 	arg.dst 	= (uint64_t)dst;
 	arg.dstSize = count;
 	arg.tid 	= syscall(SYS_gettid);
+	debug("gettid %d\n", arg.tid);
 	send_to_device(VIRTIO_IOC_MEMCPY, &arg);
 	if (arg.flag == cudaMemcpyHostToHost) {
 		memcpy(dst, src, count);
@@ -755,6 +761,7 @@ cudaError_t cudaMalloc(void **devPtr, size_t size)
 	arg.src 	= (uint64_t)NULL;
 	arg.srcSize = size;
 	arg.tid 	= syscall(SYS_gettid);
+	debug("tid %d\n", arg.tid);
 	send_to_device(VIRTIO_IOC_MALLOC, &arg);
 	*devPtr = (void *)arg.dst;
 	return (cudaError_t)arg.cmd;	
@@ -878,6 +885,7 @@ cudaError_t cudaSetDevice(int device)
 	arg.cmd 	= VIRTIO_CUDA_SETDEVICE;
 	arg.flag 	= device;
 	arg.tid 	= syscall(SYS_gettid);
+	debug("gettid %d\n", arg.tid);
 	send_to_device(VIRTIO_IOC_SETDEVICE, &arg);
 	return (cudaError_t)arg.cmd;	
 }
@@ -984,7 +992,7 @@ cudaError_t cudaStreamWaitEvent(cudaStream_t stream,
 	arg.src = (uint64_t)stream;
 	arg.dst = (uint64_t)event;
 	send_to_device(VIRTIO_IOC_STREAMWAITEVENT, &arg);
-	return (cudaError_t)arg.cmd;	
+	return (cudaError_t)arg.cmd;
 }
 
 cudaError_t cudaEventCreate(cudaEvent_t *event)
@@ -996,7 +1004,7 @@ cudaError_t cudaEventCreate(cudaEvent_t *event)
 	arg.tid = syscall(SYS_gettid);
 	send_to_device(VIRTIO_IOC_EVENTCREATE, &arg);
 	*event = (cudaEvent_t)arg.flag;
-	debug("create event is 0x%lx\n", (uint64_t)(*event));
+	debug("tid %d create event is 0x%lx\n", arg.tid, (uint64_t)(*event));
 	return (cudaError_t)arg.cmd;
 }
 
@@ -1018,13 +1026,13 @@ cudaError_t cudaEventDestroy(cudaEvent_t event)
 {
 	VirtIOArg arg;
 	func();
-	debug("destroy event is 0x%lx\n", (uint64_t)event);
 	if (event == 0)
 		return cudaSuccess;
 	memset(&arg, 0, sizeof(VirtIOArg));
 	arg.cmd 	= VIRTIO_CUDA_EVENTDESTROY;
 	arg.flag 	= (uint64_t)event;
 	arg.tid 	= syscall(SYS_gettid);
+	debug("tid %d destroy event is 0x%lx\n", arg.tid, (uint64_t)(event));
 	send_to_device(VIRTIO_IOC_EVENTDESTROY, &arg);
 	return (cudaError_t)arg.cmd;
 }
