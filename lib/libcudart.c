@@ -27,16 +27,14 @@ static int global = 0;
 // #define VIRTIO_CUDA_DEBUG
 
 #ifdef VIRTIO_CUDA_DEBUG
-#define error(fmt, arg...) printf("[ERROR]: %s->line : %d. "fmt, __FUNCTION__, __LINE__, ##arg)
 #define debug(fmt, arg...) printf("[DEBUG]: "fmt, ##arg)
 #define func() printf("[FUNC] Now in %s\n", __FUNCTION__);
 #else
-
-#define error(fmt, arg...) 
-#define debug(fmt, arg...) 
-#define func() 
-
+	#define debug(fmt, arg...) 
+	#define func() 
 #endif
+
+#define error(fmt, arg...) printf("[ERROR]: %s->line : %d. "fmt, __FUNCTION__, __LINE__, ##arg)
 
 #define MODE O_RDWR
 
@@ -81,11 +79,15 @@ static pthread_spinlock_t lock;
 */
 void send_to_device(int cmd, void *arg)
 {
+	#ifdef VIRTIO_LOCK_USER
 	pthread_spin_lock(&lock);
+	#endif
 	if(ioctl(fd, cmd, arg) == -1){
 		error("ioctl when cmd is %d\n", _IOC_NR(cmd));
 	}
+	#ifdef VIRTIO_LOCK_USER
 	pthread_spin_unlock(&lock);
+	#endif
 }
 
 BlockHeader* get_block_by_ptr(void* p)
@@ -137,7 +139,7 @@ static void *__mmalloc(size_t size)
 	VirtIOArg arg;
 	void *src = NULL;
 	int alignment = 8;
-	// int page_size = sysconf(_SC_PAGESIZE);
+	// size_t page_size = sysconf(_SC_PAGESIZE);
 	// debug("page size = %d\n", page_size);
 	size_t data_start_offset = roundup(sizeof(BlockHeader), alignment);
 	size_t header_start_offset = data_start_offset - sizeof(BlockHeader);
@@ -190,10 +192,12 @@ static void munmapctl(void *ptr)
 	send_to_device(VIRTIO_IOC_MUNMAPCTL, &arg);
 }
 
+
 void *malloc(size_t size)
 {
 	if (global==1) {
-		if (size > KMALLOC_SIZE)
+		debug("malloc 0x%lx\n", size);
+		if (size > (KMALLOC_SIZE)<<2)
 			return __mmalloc(size);
 	}
 	return __libc_malloc(size);
@@ -201,21 +205,26 @@ void *malloc(size_t size)
 
 void free(void *ptr)
 {
-	BlockHeader* blk = NULL;
-	// func();
-	if (ptr == NULL)
-		return;
-	blk = get_block_by_ptr(ptr);
-	if(!blk) {
-		__libc_free(ptr);
-		return;
+	if(global == 1) {
+		BlockHeader* blk = NULL;
+		// func();
+		if (ptr == NULL)
+			return;
+		blk = get_block_by_ptr(ptr);
+		if(!blk) {
+			__libc_free(ptr);
+			return;
+		}
+		debug("blk->address   =0x%lx\n",(uint64_t)blk->address);
+		debug("blk->total_size=0x%lx\n",(uint64_t)blk->total_size);
+		debug("magic 0x%lx\n", blk->magic);
+	    munmapctl(ptr);
+	    munmap((void*)blk->address, blk->total_size);
+	    return;
 	}
-	debug("blk->address   =0x%lx\n",(uint64_t)blk->address);
-	debug("blk->total_size=0x%lx\n",(uint64_t)blk->total_size);
-	debug("magic 0x%lx\n", blk->magic);
-    munmapctl(ptr);
-    munmap((void*)blk->address, blk->total_size);
+	return __libc_free(ptr);
 }
+
 
 int get_vdevice_count(int *result)
 {
@@ -231,7 +240,7 @@ int get_vdevice_count(int *result)
 		return -ENODEV;
 	}
 	if((size=read(fdv, buf, 16))<0) {
-		error("read error!\n");
+		error("read error! error %s\n", strerror(errno));
 		return -ENODEV;
 	}
 	close(fdv);
@@ -803,7 +812,11 @@ cudaError_t cudaHostAlloc(void **pHost, size_t size, unsigned int flags)
 	func();
 	if(size <=0)
 		return cudaSuccess;
-	*pHost = malloc(size);
+	// *pHost = malloc(size);
+	if(size < KMALLOC_SIZE)
+		*pHost = malloc(size);
+	else
+		*pHost = __mmalloc(size);
 	debug("*pHost = %p\n", *pHost);
 	return cudaHostRegister(*pHost, size, flags);
 }

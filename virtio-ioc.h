@@ -1,11 +1,12 @@
 #ifndef VIRTCR_IOC_H
 #define VIRTCR_IOC_H
 
-#define VIRTIO_CUDA_DEBUG
+// #define VIRTIO_CUDA_DEBUG
 // #define KMALLOC_SHIFT 22 // 4MB
-#define KMALLOC_SHIFT 20
+#define KMALLOC_SHIFT 13
 #define KMALLOC_SIZE (1UL<<KMALLOC_SHIFT)
-
+// #define VIRTIO_LOCK
+// #define VIRTIO_LOCK_USER
 
 #ifndef __KERNEL__
 #define __user
