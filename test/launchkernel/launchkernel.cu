@@ -77,9 +77,13 @@ int main()
 	struct cudaDeviceProp props;
 	float *d_a=0;
 	float *h_a=0;
+	float *h_b=0;
+	float *h_c=0;
 	dim3 block, grid;
-	int num = 1 << 24;
+	int num = 1 << 11;
+	int num2 = 1 << 11;
     int nbytes = num * sizeof(float);
+    int nbytes2 = num2 * sizeof(float);
     int value=41;
     struct timeval malloc_start, malloc_end;
     struct timeval meminit_start, meminit_end;
@@ -129,6 +133,10 @@ int main()
 		gettimeofday(&meminit_end, NULL);
 	#endif
 	printf("h_a=%p\n", h_a);
+	h_b=(float*)malloc(nbytes2);
+	printf("h_b=%p\n", h_b);
+	h_c=(float*)malloc(nbytes2);
+	printf("h_c=%p\n", h_c);
 	// h_a[0] = 1;
 	// start
 
@@ -160,6 +168,9 @@ int main()
 	#ifdef  TIMING
 		gettimeofday(&HtoD_end, NULL);
 	#endif
+	CHECK(cudaMemcpy(d_a, h_c, nbytes2, cudaMemcpyDefault));
+	CHECK(cudaMemcpy(d_a, h_b, nbytes2, cudaMemcpyDefault));
+	
 	#ifdef  TIMING
 		gettimeofday(&kernel_start, NULL);
 	#endif
@@ -179,6 +190,7 @@ int main()
 
  	bool bFinalResults = (bool) checkResult(h_a, num, value);
 	printf("result:%s\n", bFinalResults? "PASS" : "FAILED");
+	
 	// end
 	#ifdef  TIMING
 		gettimeofday(&d_free_start, NULL);
@@ -195,6 +207,8 @@ int main()
 	#ifdef  TIMING
 		gettimeofday(&free_end, NULL);
 	#endif
+	free(h_b);
+	free(h_c);
 
 	/* test case 3
 	* add 	cudaMalloc

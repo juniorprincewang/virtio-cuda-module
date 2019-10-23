@@ -244,7 +244,9 @@ struct port_stats {
 
 /* kernel memory for mmapping*/
 struct virtio_uvm_page{
-	size_t block_num;
+	int 	is_mmaped;
+	size_t 	block_num;
+	size_t 	offset;
 	unsigned long uvm_start;
 	unsigned long uvm_end;
 	unsigned long *blocks;
@@ -406,6 +408,62 @@ static struct port *find_port_by_vq(struct ports_device *portdev,
 out:
 	spin_unlock_irqrestore(&portdev->ports_lock, flags);
 	return port;
+}
+
+static unsigned long uvirt_to_phys_pages(const unsigned long __user buf, size_t count, struct port *port)
+{
+    int     pages;
+    struct  page **page_list;
+    unsigned int user_pages_flags = 0;
+    phys_addr_t phys = 0;
+    size_t nr_pages = 0;
+    int i=0;
+    struct virtio_uvm_page *page_uvm= NULL;
+
+    func();
+    user_pages_flags |= FOLL_WRITE;
+    gldebug("buf 0x%lx, count 0x%lx\n", (unsigned long)buf, count);
+    nr_pages = (buf + count-1)/PAGE_SIZE - buf/PAGE_SIZE + 1;
+    page_list = kvmalloc_array(nr_pages, sizeof(struct page *), GFP_KERNEL);
+    if(!page_list) {
+    	pr_err("get page error.\n"); 
+    	return -ENOMEM;
+    }
+    gldebug("page num 0x%lx\n", nr_pages);
+    down_read(&current->mm->mmap_sem);
+    pages = get_user_pages_remote( 
+            current, 
+            current->mm,
+            (unsigned long)buf,
+            nr_pages,
+            user_pages_flags,
+            page_list,
+            NULL,
+            NULL );
+    if(pages <= 0) {
+    	pr_err("get_user_pages_remote return error\n");
+    	up_read(&current->mm->mmap_sem);
+    	return -ENOMEM;
+    }
+    // bytes = pages * PAGE_SIZE - 
+    gldebug("page num = 0x%lx, get_user_pages_remote return %x\n", nr_pages, pages);
+    page_uvm = kmalloc(sizeof(struct virtio_uvm_page), GFP_KERNEL);
+	list_add(&page_uvm->list, &port->page);
+	page_uvm->block_num = nr_pages;
+	page_uvm->offset = (unsigned long)buf & ~PAGE_MASK;
+	page_uvm->uvm_start = buf;
+	page_uvm->uvm_end 	= buf+count;
+	page_uvm->is_mmaped = 0;
+	page_uvm->blocks = kmalloc(sizeof(unsigned long)*nr_pages, GFP_KERNEL);
+    for(i=0; i<pages; i++) {
+            phys = page_to_phys(page_list[i]);
+            gldebug("page mmaped phys 0x%llx.\n", phys);
+            put_page(page_list[i]);
+            page_uvm->blocks[i] = phys;
+    }
+    up_read(&current->mm->mmap_sem);
+    kvfree(page_list);
+    return virt_to_phys(page_uvm->blocks);
 }
 
 static bool is_console_port(struct port *port)
@@ -1078,10 +1136,25 @@ static void remove_port(struct kref *kref);
 static int port_fops_release(struct inode *inode, struct file *filp)
 {
 	struct port *port;
+	struct virtio_uvm_page *page, *tmp2;
+	int i=0;
+	int block_size;
+	int order;
 
 	func();
-
 	port = filp->private_data;
+	block_size = port->block_size;
+	order = get_order(block_size);
+	list_for_each_entry_safe(page, tmp2, &port->page, list) {
+		if(page->is_mmaped) {
+			for(i=0; i<page->block_num; i++)  {
+				free_pages(page->blocks[i], order);
+			}
+		}
+		list_del(&page->list);
+		kfree(page->blocks);
+		kfree(page);
+	}
 
 	/* Notify host of port being closed */
 	send_control_msg(port, VIRTIO_CONSOLE_PORT_OPEN, 0);
@@ -1751,7 +1824,8 @@ int cuda_host_register(VirtIOArg __user *arg, struct port *port)
 	VirtIOArg *payload;
 	int ret;
 	uint32_t src_size;
-	void *h_mem=NULL;
+	void *h_mem	= NULL;
+	unsigned long ptr;
 	GMOL *mol;
 
 	func();
@@ -1766,19 +1840,25 @@ int cuda_host_register(VirtIOArg __user *arg, struct port *port)
 	}
 	payload->param = 1;
 	if(!find_page_by_addr(arg->src, port)) {
-		gldebug("mmap address 0x%llx size 0x%x memory\n", arg->src, src_size);
-		payload->param = 0;
-		h_mem = kmalloc((size_t)src_size, GFP_KERNEL);
-		if(!h_mem) {
-			pr_err("[ERROR] can not malloc 0x%x memory\n", src_size);	
-			return -ENOMEM;
+		if((ptr = uvirt_to_phys_pages((unsigned long)arg->src, 
+						src_size, port)) == -ENOMEM ) {
+			gldebug("mmap address 0x%llx size 0x%x memory\n", arg->src, src_size);
+			h_mem = kmalloc((size_t)src_size, GFP_KERNEL);
+			if(!h_mem) {
+				pr_err("[ERROR] can not malloc 0x%x memory\n", src_size);	
+				return -ENOMEM;
+			}
+			mol 	 	= kmalloc(sizeof(GMOL), GFP_KERNEL);
+			mol->uaddr 	= payload->src;
+			mol->kaddr 	= (uint64_t)h_mem;
+			mol->size 	= src_size;
+			list_add(&mol->list, &port->guest_mem_list);
+			payload->param 	= 0;
+			payload->param2 = (uint64_t)virt_to_phys(h_mem);
+		} else {
+			payload->param 	= (arg->src + src_size-1)/PAGE_SIZE - arg->src/PAGE_SIZE + 1;
+			payload->param2 = (uint64_t)ptr;
 		}
-		payload->dst = (uint64_t)virt_to_phys(h_mem);
-		mol 	 	= kmalloc(sizeof(GMOL), GFP_KERNEL);
-		mol->uaddr 	= payload->src;
-		mol->kaddr 	= (uint64_t)h_mem;
-		mol->size 	= src_size;
-		list_add(&mol->list, &port->guest_mem_list);
 	}
 	#ifdef VIRTIO_LOCK
 	spin_lock(&port->io_lock);
@@ -1802,7 +1882,8 @@ int cuda_host_unregister(VirtIOArg __user *arg, struct port *port)
 	VirtIOArg *payload;
 	int ret;
 	uint32_t src_size;
-	void *ptr=NULL;
+	unsigned long ptr;
+	void *h_mem=NULL;
 	size_t size = 0;
 	GMOL *mol, *mol2;
 	
@@ -1818,23 +1899,29 @@ int cuda_host_unregister(VirtIOArg __user *arg, struct port *port)
 	}
 	payload->param = 1;
 	if(!find_page_by_addr(arg->src, port)) {
-		payload->param = 0;
-		list_for_each_entry_safe(mol, mol2, &port->guest_mem_list, list) {
-			if (payload->src == mol->uaddr) {
-				gldebug("Found addr in GMOL.\n");
-				ptr 	= (void*)mol->kaddr;
-				size 	= mol->size;
-				list_del(&mol->list);
-				kfree(mol);
-				break;
+		if((ptr = uvirt_to_phys_pages((unsigned long)arg->src, 
+						src_size, port)) == -ENOMEM ) {
+			list_for_each_entry_safe(mol, mol2, &port->guest_mem_list, list) {
+				if (payload->src == mol->uaddr) {
+					gldebug("Found addr in GMOL.\n");
+					h_mem 	= (void*)mol->kaddr;
+					size 	= mol->size;
+					list_del(&mol->list);
+					kfree(mol);
+					break;
+				}
 			}
+			if(!h_mem) {
+				pr_err("[ERROR] can not unregister 0x%llx \n", arg->src);
+				return -ENOMEM;
+			}
+			payload->srcSize 	= (uint32_t)size;
+			payload->param 		= 0;
+			payload->param2 	= (uint64_t)virt_to_phys(h_mem);
+		} else {
+			payload->param 	= (arg->src + src_size-1)/PAGE_SIZE - arg->src/PAGE_SIZE + 1;
+			payload->param2 = (uint64_t)ptr;
 		}
-		if(!ptr) {
-			pr_err("[ERROR] can not unregister 0x%llx \n", arg->src);
-			return -ENOMEM;
-		}
-		payload->srcSize 	= (uint32_t)size;
-		payload->dst 		= (uint64_t)virt_to_phys(ptr);
 	}
 	#ifdef VIRTIO_LOCK
 	spin_lock(&port->io_lock);
@@ -1849,7 +1936,7 @@ int cuda_host_unregister(VirtIOArg __user *arg, struct port *port)
 	gldebug("[+] arg->cmd = %d\n", payload->cmd);
 	put_user(payload->cmd, &arg->cmd);
 	if (!payload->param)
-		kfree(ptr);
+		kfree(h_mem);
 	kfree(payload);
 	return ret;
 }
@@ -1860,6 +1947,7 @@ int cuda_memcpy_to_symbol(VirtIOArg __user *arg, struct port *port)
 	void *h_mem = NULL;
 	uint32_t src_size;
 	int ret = 0;
+	unsigned long ptr;
 
 	func();
 	gldebug("src=0x%llx, count=0x%x, symbol=0x%llx, sym size=0x%x, "
@@ -1882,16 +1970,22 @@ int cuda_memcpy_to_symbol(VirtIOArg __user *arg, struct port *port)
 	}
 
 	// cudaMemcpyHostToDevice
-	payload->flag = 1;
+	payload->param = 1;
 	if(!find_page_by_addr(arg->src, port)) {
-		payload->flag = 0;
-		h_mem = memdup_user((const void __user *)arg->src, 
-							(size_t)src_size);
-		if(!h_mem) {
-			pr_err("[ERROR] can not malloc 0x%x memory\n", src_size);	
-			return -ENOMEM;
+		if((ptr = uvirt_to_phys_pages((unsigned long)arg->src, 
+						src_size, port)) == -ENOMEM ) {
+			h_mem = memdup_user((const void __user *)arg->src, 
+								(size_t)src_size);
+			if(!h_mem) {
+				pr_err("[ERROR] can not malloc 0x%x memory\n", src_size);	
+				return -ENOMEM;
+			}
+			payload->param 	= 0;
+			payload->param2 = (uint64_t)virt_to_phys(h_mem);
+		} else {
+			payload->param 	= (arg->src + src_size-1)/PAGE_SIZE - arg->src/PAGE_SIZE + 1;
+			payload->param2 = (uint64_t)ptr;
 		}
-		payload->param2 = (uint64_t)virt_to_phys(h_mem);
 	}
 	#ifdef VIRTIO_LOCK
 	spin_lock(&port->io_lock);
@@ -1905,7 +1999,7 @@ int cuda_memcpy_to_symbol(VirtIOArg __user *arg, struct port *port)
 	gldebug("[+] now analyse return buf\n");
 	gldebug("[+] arg->cmd = %d\n", payload->cmd);
 	put_user(payload->cmd, &arg->cmd);
-	if(!payload->flag)
+	if(!payload->param)
 		kfree(h_mem);
 	kfree(payload);
 	return ret;
@@ -1915,6 +2009,7 @@ int cuda_memcpy_from_symbol(VirtIOArg __user *arg, struct port *port)
 {
 	VirtIOArg *payload;
 	void *h_mem = NULL;
+	unsigned long ptr;
 	uint32_t dst_size;
 	int ret = 0;
 
@@ -1940,15 +2035,21 @@ int cuda_memcpy_from_symbol(VirtIOArg __user *arg, struct port *port)
 	}
 
 	// cudaMemcpyDeviceToHost
-	payload->flag = 1;
+	payload->param = 1;
 	if(!find_page_by_addr(arg->dst, port)) {
-		payload->flag = 0;
-		h_mem = kmalloc(dst_size, GFP_KERNEL);
-		if(!h_mem) {
-			pr_err("[ERROR] can not malloc 0x%x memory\n", dst_size);
-			return -ENOMEM;
+		if((ptr = uvirt_to_phys_pages((unsigned long)arg->dst, 
+						dst_size, port)) == -ENOMEM ) {
+			h_mem = kmalloc(dst_size, GFP_KERNEL);
+			if(!h_mem) {
+				pr_err("[ERROR] can not malloc 0x%x memory\n", dst_size);
+				return -ENOMEM;
+			}
+			payload->param 	= 0;
+			payload->param2 = (uint64_t)virt_to_phys(h_mem);
+		} else {
+			payload->param 	= (arg->dst + dst_size-1)/PAGE_SIZE - arg->dst/PAGE_SIZE + 1;
+			payload->param2 = (uint64_t)ptr;
 		}
-		payload->param2 = (uint64_t)virt_to_phys(h_mem);
 	}
 	#ifdef VIRTIO_LOCK
 	spin_lock(&port->io_lock);
@@ -1962,7 +2063,7 @@ int cuda_memcpy_from_symbol(VirtIOArg __user *arg, struct port *port)
 	gldebug("[+] now analyse return buf\n");
 	gldebug("[+] arg->cmd = %d\n", payload->cmd);
 	put_user(payload->cmd, &arg->cmd);
-	if(!payload->flag) {
+	if(!payload->param) {
 		copy_to_user((void __user *)arg->dst, h_mem, dst_size);
 		kfree(h_mem);
 	}
@@ -2000,7 +2101,8 @@ int cuda_memcpy(VirtIOArg __user *arg, struct port *port)
 	VirtIOArg *payload;
 	int found = 0;
 	void *h_mem=NULL;
-	uint32_t src_size;
+	size_t src_size;
+	unsigned long ptr;
 	int ret = 0;
 	func();
 	gldebug("[+] arg->cmd = %d\n", arg->cmd);
@@ -2026,15 +2128,21 @@ int cuda_memcpy(VirtIOArg __user *arg, struct port *port)
 HtoD:
 		payload->param = 1;
 		if(!find_page_by_addr(arg->src, port)) {
-			payload->param = 0;
-			h_mem = memdup_user((const void __user *)arg->src, 
-								(size_t)src_size);
-			if(!h_mem) {
-				pr_err("[ERROR] can not malloc 0x%x memory\n", src_size);	
-				return -ENOMEM;
+			if((ptr = uvirt_to_phys_pages((unsigned long)arg->src, 
+						src_size, port)) == -ENOMEM ) {
+				h_mem = memdup_user((const void __user *)arg->src, 
+									(size_t)src_size);
+				if(!h_mem) {
+					pr_err("[ERROR] can not malloc 0x%lx memory\n", src_size);
+					return -ENOMEM;
+				}
+				gldebug("kmalloc address %p\n", h_mem);
+				payload->param 	= 0;
+				payload->param2 = (uint64_t)virt_to_phys(h_mem);
+			} else {
+				payload->param 	= (arg->src + src_size-1)/PAGE_SIZE - arg->src/PAGE_SIZE + 1;
+				payload->param2 = (uint64_t)ptr;
 			}
-			gldebug("kmalloc address %p\n", h_mem);
-			payload->param2 = (uint64_t)virt_to_phys(h_mem);
 		}
 		#ifdef VIRTIO_LOCK
 		spin_lock(&port->io_lock);
@@ -2059,13 +2167,19 @@ HtoD:
 DtoH:
 		payload->param = 1;
 		if(!find_page_by_addr(arg->dst, port)) {
-			payload->param = 0;
-			h_mem = kmalloc(src_size, GFP_KERNEL);
-			if(!h_mem) {
-				pr_err("[ERROR] can not malloc 0x%x memory\n", src_size);
-				return -ENOMEM;
+			if((ptr = uvirt_to_phys_pages((unsigned long)arg->src, 
+						src_size, port)) == -ENOMEM ) {
+				h_mem = kmalloc(src_size, GFP_KERNEL);
+				if(!h_mem) {
+					pr_err("[ERROR] can not malloc 0x%lx memory\n", src_size);
+					return -ENOMEM;
+				}
+				payload->param = 0;
+				payload->param2 = (uint64_t)virt_to_phys(h_mem);
+			} else {
+				payload->param 	= (arg->dst + src_size-1)/PAGE_SIZE - arg->dst/PAGE_SIZE + 1;
+				payload->param2 = (uint64_t)ptr;
 			}
-			payload->param2 = (uint64_t)virt_to_phys(h_mem);
 		}
 		#ifdef VIRTIO_LOCK
 		spin_lock(&port->io_lock);
@@ -2145,7 +2259,8 @@ int cuda_memcpy_async(VirtIOArg __user *arg, struct port *port)
 	uint32_t src_size;
 	int ret = 0;
 	int found = 0;
-	void *ptr = NULL;
+	unsigned long ptr;
+	void *h_mem = NULL;
 
 	func();
 	gldebug("[+] arg->cmd = %d\n", arg->cmd);
@@ -2171,14 +2286,20 @@ int cuda_memcpy_async(VirtIOArg __user *arg, struct port *port)
 HtoDAsync:
 		payload->param = 1;
 		if(!find_page_by_addr(arg->src, port)) {
-			ptr = (void *)get_addr_in_gmol(arg->src, port);
-			if(!ptr) {
-				pr_err("[ERROR] ptr is invalid 0x%llx memory\n", arg->src);
-				return -ENOMEM;
+			if((ptr = uvirt_to_phys_pages((unsigned long)arg->src, 
+						src_size, port)) == -ENOMEM ) {
+				h_mem = (void *)get_addr_in_gmol(arg->src, port);
+				if(!h_mem) {
+					pr_err("[ERROR] ptr is invalid 0x%llx memory\n", arg->src);
+					return -ENOMEM;
+				}
+				copy_from_user(h_mem, (void*)arg->src, src_size);
+				payload->param  = 0;
+				payload->param2 = (uint64_t)virt_to_phys(h_mem);
+			} else {
+				payload->param 	= (arg->src + src_size-1)/PAGE_SIZE - arg->src/PAGE_SIZE + 1;
+				payload->param2 = (uint64_t)ptr;
 			}
-			copy_from_user(ptr, (void*)arg->src, src_size);
-			payload->param  = 0;
-			payload->param2 = (uint64_t)virt_to_phys(ptr);
 		}
 		#ifdef VIRTIO_LOCK
 		spin_lock(&port->io_lock);
@@ -2201,13 +2322,19 @@ HtoDAsync:
 DtoHAsync:
 		payload->param = 1;
 		if(!find_page_by_addr(arg->dst, port)) {
-			ptr = (void *)get_addr_in_gmol(arg->dst, port);
-			if(!ptr) {
-				pr_err("[ERROR] ptr is invalid 0x%llx memory\n", arg->dst);
-				return -ENOMEM;
+			if((ptr = uvirt_to_phys_pages((unsigned long)arg->dst, 
+						src_size, port)) == -ENOMEM ) {
+				h_mem = (void *)get_addr_in_gmol(arg->dst, port);
+				if(!h_mem) {
+					pr_err("[ERROR] ptr is invalid 0x%llx memory\n", arg->dst);
+					return -ENOMEM;
+				}
+				payload->param 	= 0;
+				payload->param2 = (uint64_t)virt_to_phys(h_mem);
+			} else {
+				payload->param 	= (arg->dst + src_size-1)/PAGE_SIZE - arg->dst/PAGE_SIZE + 1;
+				payload->param2 = (uint64_t)ptr;
 			}
-			payload->param 	= 0;
-			payload->param2 = (uint64_t)virt_to_phys(ptr);
 		}
 		#ifdef VIRTIO_LOCK
 		spin_lock(&port->io_lock);
@@ -2222,7 +2349,7 @@ DtoHAsync:
 		gldebug("[+] arg->cmd = %d\n", payload->cmd);
 		put_user(payload->cmd, &arg->cmd);
 		if(!payload->param)
-			copy_to_user((void*)arg->dst, ptr, src_size);
+			copy_to_user((void*)arg->dst, h_mem, src_size);
 	} else if(arg->flag == 3) {
 	// cudaMemcpyDeviceToDevice 
 		if((found = find_addr_in_mol(payload->src, port)) != 0){
@@ -2965,6 +3092,7 @@ int cublas_set_vector(VirtIOArg __user *arg, struct port *port)
 	uint32_t size;
 	void *ptr = NULL;
 	void *h_mem = NULL;
+	unsigned long ptr_page;
 
 	func();
 	payload = (VirtIOArg *)memdup_user(arg, arg_len);
@@ -2978,20 +3106,26 @@ int cublas_set_vector(VirtIOArg __user *arg, struct port *port)
 	}
 	payload->flag = 1;
 	if(!find_page_by_addr(arg->src, port)) {
-		payload->flag = 0;
-		h_mem = memdup_user((const void __user *)arg->src, (size_t)size);
-		if(!h_mem) {
-			pr_err("[ERROR] can not malloc 0x%x memory\n", size);
-			return -ENOMEM;
+		if((ptr_page = uvirt_to_phys_pages((unsigned long)arg->src, 
+						size, port)) == -ENOMEM ) {
+			h_mem = memdup_user((const void __user *)arg->src, (size_t)size);
+			if(!h_mem) {
+				pr_err("[ERROR] can not malloc 0x%x memory\n", size);
+				return -ENOMEM;
+			}
+			payload->flag = 0;
+			payload->param2 = (uint64_t)virt_to_phys(h_mem);
+		} else {
+			payload->param 	= (arg->src + size-1)/PAGE_SIZE - arg->src/PAGE_SIZE + 1;
+			payload->param2 = (uint64_t)ptr_page;
 		}
-		payload->src = (uint64_t)virt_to_phys(h_mem);
 	}
-	ptr = memdup_user((const void __user*)arg->param, arg->paramSize);
+	ptr = memdup_user((const void __user*)arg->src2, arg->srcSize2);
 	if(!ptr) {
-		pr_err("[ERROR] can not malloc 0x%x memory\n", arg->paramSize);
+		pr_err("[ERROR] can not malloc 0x%x memory\n", arg->srcSize2);
 		return -ENOMEM;
 	}
-	payload->param = (uint64_t)virt_to_phys(ptr);
+	payload->src2 = (uint64_t)virt_to_phys(ptr);
 	ret = send_to_virtio(port, (void*)payload, arg_len);
 	gldebug("[+] now analyse return buf\n");
 	gldebug("[+] arg->cmd = %d\n", payload->cmd);
@@ -3010,6 +3144,7 @@ int cublas_get_vector(VirtIOArg __user *arg, struct port *port)
 	uint32_t size;
 	void *ptr = NULL;
 	void *h_mem = NULL;
+	unsigned long ptr_page;
 
 	func();
 	payload = (VirtIOArg *)memdup_user(arg, arg_len);
@@ -3023,20 +3158,26 @@ int cublas_get_vector(VirtIOArg __user *arg, struct port *port)
 	}
 	payload->flag = 1;
 	if(!find_page_by_addr(arg->dst, port)) {
-		payload->flag = 0;
-		h_mem = kmalloc(size, GFP_KERNEL);
-		if(!h_mem) {
-			pr_err("[ERROR] can not malloc 0x%x memory\n", size);
-			return -ENOMEM;
+		if((ptr_page = uvirt_to_phys_pages((unsigned long)arg->dst, 
+						size, port)) == -ENOMEM ) {
+			h_mem = kmalloc(size, GFP_KERNEL);
+			if(!h_mem) {
+				pr_err("[ERROR] can not malloc 0x%x memory\n", size);
+				return -ENOMEM;
+			}
+			payload->flag = 0;
+			payload->param2 = (uint64_t)virt_to_phys(h_mem);
+		} else {
+			payload->param 	= (arg->dst + size-1)/PAGE_SIZE - arg->dst/PAGE_SIZE + 1;
+			payload->param2 = (uint64_t)ptr_page;
 		}
-		payload->param2 = (uint64_t)virt_to_phys(h_mem);
 	}
-	ptr = memdup_user((const void __user*)arg->param, arg->paramSize);
+	ptr = memdup_user((const void __user*)arg->src2, arg->srcSize2);
 	if(!ptr) {
-		pr_err("[ERROR] can not malloc 0x%x memory\n", arg->paramSize);
+		pr_err("[ERROR] can not malloc 0x%x memory\n", arg->srcSize2);
 		return -ENOMEM;
 	}
-	payload->param = (uint64_t)virt_to_phys(ptr);
+	payload->src2 = (uint64_t)virt_to_phys(ptr);
 	ret = send_to_virtio(port, (void*)payload, arg_len);
 	gldebug("[+] now analyse return buf\n");
 	gldebug("[+] arg->cmd = %d\n", payload->cmd);
@@ -3376,6 +3517,7 @@ int cublas_set_matrix(VirtIOArg __user *arg, struct port *port)
 	uint32_t size;
 	void *ptr = NULL;
 	void *h_mem = NULL;
+	unsigned long ptr_page;
 
 	func();
 	payload = (VirtIOArg *)memdup_user(arg, arg_len);
@@ -3389,20 +3531,26 @@ int cublas_set_matrix(VirtIOArg __user *arg, struct port *port)
 	}
 	payload->flag = 1;
 	if(!find_page_by_addr(arg->src, port)) {
-		payload->flag = 0;
-		h_mem = memdup_user((const void __user *)arg->src, (size_t)size);
-		if(!h_mem) {
-			pr_err("[ERROR] can not malloc 0x%x memory\n", size);
-			return -ENOMEM;
+		if((ptr_page = uvirt_to_phys_pages((unsigned long)arg->src, 
+						size, port)) == -ENOMEM ) {
+			h_mem = memdup_user((const void __user *)arg->src, (size_t)size);
+			if(!h_mem) {
+				pr_err("[ERROR] can not malloc 0x%x memory\n", size);
+				return -ENOMEM;
+			}
+			payload->flag = 0;
+			payload->src = (uint64_t)virt_to_phys(h_mem);
+		} else {
+			payload->param 	= (arg->src + size-1)/PAGE_SIZE - arg->src/PAGE_SIZE + 1;
+			payload->param2 = (uint64_t)ptr_page;
 		}
-		payload->src = (uint64_t)virt_to_phys(h_mem);
 	}
-	ptr = memdup_user((const void __user*)arg->param, arg->paramSize);
+	ptr = memdup_user((const void __user*)arg->src2, arg->srcSize2);
 	if(!ptr) {
-		pr_err("[ERROR] can not malloc 0x%x memory\n", arg->paramSize);
+		pr_err("[ERROR] can not malloc 0x%x memory\n", arg->srcSize2);
 		return -ENOMEM;
 	}
-	payload->param = (uint64_t)virt_to_phys(ptr);
+	payload->src2 = (uint64_t)virt_to_phys(ptr);
 	ret = send_to_virtio(port, (void*)payload, arg_len);
 	gldebug("[+] now analyse return buf\n");
 	gldebug("[+] arg->cmd = %d\n", payload->cmd);
@@ -3421,6 +3569,7 @@ int cublas_get_matrix(VirtIOArg __user *arg, struct port *port)
 	uint32_t size;
 	void *ptr = NULL;
 	void *h_mem = NULL;
+	unsigned long ptr_page;
 
 	func();
 	payload = (VirtIOArg *)memdup_user(arg, arg_len);
@@ -3434,20 +3583,26 @@ int cublas_get_matrix(VirtIOArg __user *arg, struct port *port)
 	}
 	payload->flag = 1;
 	if(!find_page_by_addr(arg->dst, port)) {
-		payload->flag = 0;
-		h_mem = kmalloc(size, GFP_KERNEL);
-		if(!h_mem) {
-			pr_err("[ERROR] can not malloc 0x%x memory\n", size);
-			return -ENOMEM;
+		if((ptr_page = uvirt_to_phys_pages((unsigned long)arg->dst, 
+						size, port)) == -ENOMEM ) {
+			h_mem = kmalloc(size, GFP_KERNEL);
+			if(!h_mem) {
+				pr_err("[ERROR] can not malloc 0x%x memory\n", size);
+				return -ENOMEM;
+			}
+			payload->flag = 0;
+			payload->param2 = (uint64_t)virt_to_phys(h_mem);
+		} else {
+			payload->param 	= (arg->dst + size-1)/PAGE_SIZE - arg->dst/PAGE_SIZE + 1;
+			payload->param2 = (uint64_t)ptr_page;
 		}
-		payload->param2 = (uint64_t)virt_to_phys(h_mem);
 	}
-	ptr = memdup_user((const void __user*)arg->param, arg->paramSize);
+	ptr = memdup_user((const void __user*)arg->src2, arg->srcSize2);
 	if(!ptr) {
-		pr_err("[ERROR] can not malloc 0x%x memory\n", arg->paramSize);
+		pr_err("[ERROR] can not malloc 0x%x memory\n", arg->srcSize2);
 		return -ENOMEM;
 	}
-	payload->param = (uint64_t)virt_to_phys(ptr);
+	payload->src2 = (uint64_t)virt_to_phys(ptr);
 	ret = send_to_virtio(port, (void*)payload, arg_len);
 	gldebug("[+] now analyse return buf\n");
 	gldebug("[+] arg->cmd = %d\n", payload->cmd);
@@ -3518,6 +3673,7 @@ int curand_generate(VirtIOArg __user *arg, struct port *port)
 	int ret;
 	uint32_t size;
 	void *h_mem = NULL;
+	unsigned long ptr;
 	func();
 
 	payload = (VirtIOArg *)memdup_user(arg, arg_len);
@@ -3533,13 +3689,20 @@ int curand_generate(VirtIOArg __user *arg, struct port *port)
 		payload->flag = 0;
 	} else {
 		if(!find_page_by_addr(arg->dst, port)) {
-			payload->flag 	= 1;
-			h_mem = kmalloc(size, GFP_KERNEL);
-			if(!h_mem) {
-				pr_err("[ERROR] can not malloc 0x%x memory\n", size);
-				return -ENOMEM;
+			if((ptr = uvirt_to_phys_pages((unsigned long)arg->dst,
+						size, port)) == -ENOMEM ) {
+				h_mem = kmalloc(size, GFP_KERNEL);
+				if(!h_mem) {
+					pr_err("[ERROR] can not malloc 0x%x memory\n", size);
+					return -ENOMEM;
+				}
+				payload->flag 	= 1;
+				payload->param2 = (uint64_t)virt_to_phys(h_mem);
+			} else {
+				payload->flag 	= 3;
+				payload->param 	= (arg->dst + size-1)/PAGE_SIZE - arg->dst/PAGE_SIZE + 1;
+				payload->param2 = (uint64_t)ptr;
 			}
-			payload->param2 = (uint64_t)virt_to_phys(h_mem);
 		} else {
 			payload->flag 	= 2;
 		}
@@ -3560,9 +3723,10 @@ int curand_generate_normal_v2(VirtIOArg __user *arg, struct port *port)
 {
 	VirtIOArg *payload;
 	int ret;
-	void *ptr;
 	uint32_t size;
+	void *ptr;
 	void *h_mem = NULL;
+	unsigned long ptr_page;
 	func();
 
 	payload = (VirtIOArg *)memdup_user(arg, arg_len);
@@ -3578,23 +3742,30 @@ int curand_generate_normal_v2(VirtIOArg __user *arg, struct port *port)
 		payload->flag = 0;
 	} else {
 		if(!find_page_by_addr(arg->dst, port)) {
-			payload->flag 	= 1;
-			h_mem = kmalloc(size, GFP_KERNEL);
-			if(!h_mem) {
-				pr_err("[ERROR] can not malloc 0x%x memory\n", size);
-				return -ENOMEM;
+			if((ptr_page = uvirt_to_phys_pages((unsigned long)arg->dst, 
+						size, port)) == -ENOMEM ) {
+				h_mem = kmalloc(size, GFP_KERNEL);
+				if(!h_mem) {
+					pr_err("[ERROR] can not malloc 0x%x memory\n", size);
+					return -ENOMEM;
+				}
+				payload->flag 	= 1;
+				payload->param2 = (uint64_t)virt_to_phys(h_mem);
+			} else {
+				payload->flag 	= 3;
+				payload->param 	= (arg->dst + size-1)/PAGE_SIZE - arg->dst/PAGE_SIZE + 1;
+				payload->param2 = (uint64_t)ptr_page;
 			}
-			payload->param2 = (uint64_t)virt_to_phys(h_mem);
 		} else {
 			payload->flag 	= 2;
 		}
 	}
-	ptr = memdup_user((const void __user*)arg->param, arg->paramSize);
+	ptr = memdup_user((const void __user*)arg->src2, arg->paramSize);
 	if(!ptr) {
 		pr_err("[ERROR] can not malloc 0x%x memory\n", arg->paramSize);
 		return -ENOMEM;
 	}
-	payload->param = (uint64_t)virt_to_phys(ptr);
+	payload->src2 = (uint64_t)virt_to_phys(ptr);
 	ret = send_to_virtio(port, (void*)payload, arg_len);
 	gldebug("[+] now analyse return buf\n");
 	gldebug("[+] arg->cmd = %d\n", payload->cmd);
@@ -3625,6 +3796,7 @@ int curand_generate_uniform_v2(VirtIOArg __user *arg, struct port *port)
 	int ret;
 	uint32_t size;
 	void *h_mem = NULL;
+	unsigned long ptr;
 	func();
 
 	payload = (VirtIOArg *)memdup_user(arg, arg_len);
@@ -3640,13 +3812,20 @@ int curand_generate_uniform_v2(VirtIOArg __user *arg, struct port *port)
 		payload->flag = 0;
 	} else {
 		if(!find_page_by_addr(arg->dst, port)) {
-			payload->flag 	= 1;
-			h_mem = kmalloc(size, GFP_KERNEL);
-			if(!h_mem) {
-				pr_err("[ERROR] can not malloc 0x%x memory\n", size);
-				return -ENOMEM;
+			if((ptr = uvirt_to_phys_pages((unsigned long)arg->dst, 
+						size, port)) == -ENOMEM ) {
+				h_mem = kmalloc(size, GFP_KERNEL);
+				if(!h_mem) {
+					pr_err("[ERROR] can not malloc 0x%x memory\n", size);
+					return -ENOMEM;
+				}
+				payload->flag 	= 1;
+				payload->param2 = (uint64_t)virt_to_phys(h_mem);
+			} else {
+				payload->flag 	= 3;
+				payload->param 	= (arg->dst + size-1)/PAGE_SIZE - arg->dst/PAGE_SIZE + 1;
+				payload->param2 = (uint64_t)ptr;
 			}
-			payload->param2 = (uint64_t)virt_to_phys(h_mem);
 		} else {
 			payload->flag 	= 2;
 		}
@@ -4004,13 +4183,15 @@ static void virtio_cuda_device_munmap(struct vm_area_struct *vma)
 	struct virtio_uvm_page *page, *tmp2;
 	func();
 	list_for_each_entry_safe(page, tmp2, &port->page, list) {
-		if(vma->vm_start == page->uvm_start && vma->vm_end == page->uvm_end) {
-			// gldebug("Found munmap 0x%lx-0x%lx\n", vma->vm_start, vma->vm_end);
-			for(i=0; i<page->block_num; i++) 
-				free_pages(page->blocks[i], order);
-			list_del(&page->list);
-			kfree(page->blocks);
-			kfree(page);
+		if (page->is_mmaped) {
+			if(vma->vm_start == page->uvm_start && vma->vm_end == page->uvm_end) {
+				// gldebug("Found munmap 0x%lx-0x%lx\n", vma->vm_start, vma->vm_end);
+				for(i=0; i<page->block_num; i++) 
+					free_pages(page->blocks[i], order);
+				list_del(&page->list);
+				kfree(page->blocks);
+				kfree(page);
+			}
 		}
 	}
 }
@@ -4040,9 +4221,10 @@ static int port_fops_mmap(struct file *filp, struct vm_area_struct *vma)
 	block_num = size / block_size;
 	pages = kmalloc(sizeof(struct virtio_uvm_page),GFP_KERNEL);
 	list_add(&pages->list, &port->page);
-	pages->block_num = block_num;
-	pages->uvm_start = vma->vm_start;
-	pages->uvm_end 	= vma->vm_end;
+	pages->block_num 	= block_num;
+	pages->uvm_start 	= vma->vm_start;
+	pages->uvm_end 		= vma->vm_end;
+	pages->is_mmaped 	= 1;
 	gldebug("block_num is %d\n", block_num);
 	pages->blocks = kmalloc(sizeof(unsigned long)*block_num, GFP_KERNEL);
 	for(i =0; i< block_num; i++) {

@@ -193,11 +193,11 @@ static void munmapctl(void *ptr)
 }
 
 
-void *malloc(size_t size)
+/*void *malloc(size_t size)
 {
 	if (global==1) {
 		debug("malloc 0x%lx\n", size);
-		if (size > (KMALLOC_SIZE)<<2)
+		// if (size > (KMALLOC_SIZE)<<2)
 			return __mmalloc(size);
 	}
 	return __libc_malloc(size);
@@ -207,7 +207,7 @@ void free(void *ptr)
 {
 	if(global == 1) {
 		BlockHeader* blk = NULL;
-		// func();
+		func();
 		if (ptr == NULL)
 			return;
 		blk = get_block_by_ptr(ptr);
@@ -223,7 +223,7 @@ void free(void *ptr)
 	    return;
 	}
 	return __libc_free(ptr);
-}
+}*/
 
 
 int get_vdevice_count(int *result)
@@ -685,7 +685,7 @@ cudaError_t cudaMemcpyToSymbol(	const void *symbol, const void *src,
 	debug("symbol is %p\n", symbol);
 	arg.dst 	= (uint64_t)symbol;
 	arg.dstSize = 0;
-	arg.param 	= offset;
+	arg.src2 	= offset;
 	arg.tid 	= syscall(SYS_gettid);
 	send_to_device(VIRTIO_IOC_MEMCPYTOSYMBOL, &arg);
 	return (cudaError_t)arg.cmd;	
@@ -706,7 +706,7 @@ cudaError_t cudaMemcpyFromSymbol(	void *dst, const void *symbol,
 	arg.src 	= (uint64_t)symbol;
 	arg.dst 	= (uint64_t)dst;
 	arg.dstSize = count;
-	arg.param 	= offset;
+	arg.src2 	= offset;
 	arg.tid 	= syscall(SYS_gettid);
 	send_to_device(VIRTIO_IOC_MEMCPYFROMSYMBOL, &arg);
 	return (cudaError_t)arg.cmd;	
@@ -812,11 +812,11 @@ cudaError_t cudaHostAlloc(void **pHost, size_t size, unsigned int flags)
 	func();
 	if(size <=0)
 		return cudaSuccess;
-	// *pHost = malloc(size);
-	if(size < KMALLOC_SIZE)
-		*pHost = malloc(size);
-	else
-		*pHost = __mmalloc(size);
+	*pHost = __libc_malloc(size);
+	// if(size < KMALLOC_SIZE)
+	// 	*pHost = malloc(size);
+	// else
+	// 	*pHost = __mmalloc(size);
 	debug("*pHost = %p\n", *pHost);
 	return cudaHostRegister(*pHost, size, flags);
 }
@@ -1516,8 +1516,8 @@ CUBLASAPI cublasStatus_t cublasGetVector (int n, int elemSize, const void *x,
 	memcpy(buf+idx, &incx, int_size);
 	idx += int_size;
 	memcpy(buf+idx, &incy, int_size);
-	arg.param 		= (uint64_t)buf;
-	arg.paramSize 	= len;
+	arg.src2 		= (uint64_t)buf;
+	arg.srcSize2 	= len;
 	send_to_device(VIRTIO_IOC_CUBLAS_GETVECTOR, &arg);
 	__libc_free(buf);
 	return (cublasStatus_t)arg.cmd;
@@ -2057,8 +2057,8 @@ cublasStatus_t cublasSetMatrix (int rows, int cols, int elemSize,
 	memcpy(buf+idx, &lda, int_size);
 	idx += int_size;
 	memcpy(buf+idx, &ldb, int_size);
-	arg.param 		= (uint64_t)buf;
-	arg.paramSize 	= len;
+	arg.src2 		= (uint64_t)buf;
+	arg.srcSize2 	= len;
 	send_to_device(VIRTIO_IOC_CUBLAS_SETMATRIX, &arg);
 	__libc_free(buf);
 	return (cublasStatus_t)arg.cmd;
@@ -2090,8 +2090,8 @@ cublasStatus_t cublasGetMatrix (int rows, int cols, int elemSize,
 	memcpy(buf+idx, &lda, int_size);
 	idx += int_size;
 	memcpy(buf+idx, &ldb, int_size);
-	arg.param 		= (uint64_t)buf;
-	arg.paramSize 	= len;
+	arg.src2 		= (uint64_t)buf;
+	arg.srcSize2 	= len;
 	send_to_device(VIRTIO_IOC_CUBLAS_GETMATRIX, &arg);
 	__libc_free(buf);
 	return (cublasStatus_t)arg.cmd;
@@ -2137,7 +2137,7 @@ curandGenerate(curandGenerator_t generator, unsigned int *outputPtr, size_t num)
 	arg.src 	= (uint64_t)generator;
 	arg.dst 	= (uint64_t)outputPtr;
 	arg.dstSize	= (uint32_t)(num*sizeof(unsigned int));
-	arg.param	= (uint64_t)num;
+	arg.src2	= (uint64_t)num;
 	send_to_device(VIRTIO_IOC_CURAND_GENERATE, &arg);
 	return (curandStatus_t)arg.cmd;
 }
@@ -2157,13 +2157,13 @@ curandGenerateNormal(curandGenerator_t generator, float *outputPtr,
 	arg.src 	= (uint64_t)generator;
 	arg.dst 	= (uint64_t)outputPtr;
 	arg.dstSize	= (uint32_t)(n*sizeof(float));
-	arg.src2	= (uint64_t)n;
+	arg.srcSize	= (uint32_t)n;
 	len = sizeof(float)*2;
 	buf = __libc_malloc(len);
 	memcpy(buf+idx, &mean, sizeof(float));
 	idx += sizeof(float);
 	memcpy(buf+idx, &stddev, sizeof(float));
-	arg.param 		= (uint64_t)buf;
+	arg.src2 		= (uint64_t)buf;
 	arg.paramSize 	= len;
 	send_to_device(VIRTIO_IOC_CURAND_GENERATENORMAL, &arg);
 	__libc_free(buf);
@@ -2185,13 +2185,13 @@ curandGenerateNormalDouble(curandGenerator_t generator, double *outputPtr,
 	arg.src 	= (uint64_t)generator;
 	arg.dst 	= (uint64_t)outputPtr;
 	arg.dstSize	= (uint32_t)(n*sizeof(double));
-	arg.src2	= (uint64_t)n;
+	arg.srcSize	= (uint32_t)n;
 	len = sizeof(double)*2;
 	buf = __libc_malloc(len);
 	memcpy(buf+idx, &mean, sizeof(double));
 	idx += sizeof(double);
 	memcpy(buf+idx, &stddev, sizeof(double));
-	arg.param 		= (uint64_t)buf;
+	arg.src2 		= (uint64_t)buf;
 	arg.paramSize 	= len;
 	send_to_device(VIRTIO_IOC_CURAND_GENERATENORMALDOUBLE, &arg);
 	__libc_free(buf);
@@ -2208,7 +2208,7 @@ curandGenerateUniform(curandGenerator_t generator, float *outputPtr, size_t num)
 	arg.src 	= (uint64_t)generator;
 	arg.dst 	= (uint64_t)outputPtr;
 	arg.dstSize	= (uint32_t)(num*sizeof(float));
-	arg.param	= (uint64_t)num;
+	arg.src2	= (uint64_t)num;
 	send_to_device(VIRTIO_IOC_CURAND_GENERATEUNIFORM, &arg);
 	return (curandStatus_t)arg.cmd;
 }
@@ -2223,7 +2223,7 @@ curandGenerateUniformDouble(curandGenerator_t generator, double *outputPtr, size
 	arg.src 	= (uint64_t)generator;
 	arg.dst 	= (uint64_t)outputPtr;
 	arg.dstSize	= (uint32_t)(num*sizeof(double));
-	arg.param	= (uint64_t)num;
+	arg.src2	= (uint64_t)num;
 	send_to_device(VIRTIO_IOC_CURAND_GENERATEUNIFORMDOUBLE, &arg);
 	return (curandStatus_t)arg.cmd;
 }
