@@ -6,6 +6,9 @@ The user runtime wrappered library in VM (guest OS) provides CUDA runtime access
 The front-end driver is responsible for the memory management, transferring data, analyzing the ioctl cmds from the customed library, and passing the cmds by the control channel.
 
 
+The Intel SGX is emulated in [qemu](https://github.com/intel/qemu-sgx).  
+We add sgx-support in our virtio-based vCUDA which is developed in branch *cuda-sgx*. The corresponding QEMU can be found [here](https://github.com/juniorprincewang/qemu-sgx-cuda).  
+
 ## Installation
 
 ### Prerequisites
