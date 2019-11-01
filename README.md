@@ -364,4 +364,4 @@ To support [Caffe](https://github.com/BVLC/caffe.git), we implement CUBLAS & CUR
 
 
 Last but not least, thanks [qcuda](https://github.com/coldfunction/qCUDA) for inspiring.  
-Also, what we use for message channels is [chan: Pure C implementation of Go channels. ](https://github.com/tylertreat/chan.gitPure C implementation of Go channels. )
+Also, what we use for message channels is [chan: Pure C implementation of Go channels. ](https://github.com/tylertreat/chan)
