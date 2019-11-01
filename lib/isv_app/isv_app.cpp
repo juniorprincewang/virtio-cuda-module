@@ -1,4 +1,6 @@
+#ifndef _GNU_SOURCE
 #define _GNU_SOURCE // RTLD_NEXT
+#endif
 #include <dlfcn.h> // dlsym
 #include <cuda.h>
 #include <cuda_runtime.h>
@@ -30,43 +32,33 @@
 // Needed to call untrusted key exchange library APIs, i.e. sgx_ra_proc_msg2.
 #include "sgx_ukey_exchange.h"
 
-// Needed to get service provider's information, in your real project, you will
-// need to talk to real server.
-#include "network_ra.h"
-
 // Needed to create enclave and do ecall.
 #include "sgx_urts.h"
 
 // Needed to query extended epid group id.
 #include "sgx_uae_service.h"
 
-#include "service_provider.h"
-
 #ifndef SAFE_FREE
 #define SAFE_FREE(ptr) {if (NULL != (ptr)) {free(ptr); (ptr) = NULL;}}
 #endif
 
-// In addition to generating and sending messages, this application
-// can use pre-generated messages to verify the generation of
-// messages and the information flow.
-#include "sample_messages.h"
-
-
 #define ENCLAVE_PATH "/usr/local/cuda/lib64/isv_enclave.signed.so"
 
 
-static int global = 0;
+static int global_init = 0;
 
 #define DEVICE_FILE "/dev/cudaport2p%d"
 
 // #define VIRTIO_CUDA_DEBUG
 
 #ifdef VIRTIO_CUDA_DEBUG
-#define debug(fmt, arg...) printf("[DEBUG]: " fmt, ##arg)
-#define func() printf("[FUNC] Now in %s\n", __FUNCTION__);
+    #define debug(fmt, arg...) printf("[DEBUG]: " fmt, ##arg)
+    #define func() printf("[FUNC] Now in %s\n", __FUNCTION__);
+    #define debug_clean(fmt, arg...) printf("" fmt, ##arg)
 #else
     #define debug(fmt, arg...) 
     #define func() 
+    #define debug_clean(fmt, arg...)  
 #endif
 
 #define error(fmt, arg...) printf("[ERROR]: %s->line : %d. " fmt, __FUNCTION__, __LINE__, ##arg)
@@ -93,7 +85,7 @@ static int minor = 0;       // get current device
 
 extern "C" void *__libc_malloc(size_t);
 extern "C" void __libc_free(void *ptr);
-static unsigned int map_offset=0;
+static size_t map_offset=0;
 static size_t const BLOCK_MAGIC = 0xdeadbeaf;
 
 typedef struct block_header
@@ -104,12 +96,20 @@ typedef struct block_header
     size_t magic;
 } BlockHeader;
 
+typedef struct sgx_ra_env
+{
+    sgx_ra_context_t context;
+    sgx_enclave_id_t enclave_id;
+} SGX_RA_ENV;
+
+
 __attribute__ ((constructor)) void my_init(void);
 __attribute__ ((destructor)) void my_fini(void);
-static int sgx_ecdh();
+static int init_sgx_ecdh(SGX_RA_ENV *sgx_ctx);
+static int fini_sgx_ecdh(SGX_RA_ENV sgx_ctx);
 
 static pthread_spinlock_t lock;
-
+static SGX_RA_ENV sgx_env;
 /*
  * ioctl
 */
@@ -200,8 +200,8 @@ static void *__mmalloc(size_t size)
     memset(&arg, 0, ARG_LEN);
     arg.cmd     = VIRTIO_CUDA_MMAPCTL;
     arg.src     = (uint64_t)ptr;
-    arg.srcSize = blocks_size;
-    arg.tid     = syscall(SYS_gettid);
+    arg.srcSize = (uint32_t)blocks_size;
+    arg.tid     = (uint32_t)syscall(SYS_gettid);
     send_to_device(VIRTIO_IOC_MMAPCTL, &arg);
     
     blk->address        = ptr;
@@ -223,15 +223,15 @@ static void munmapctl(void *ptr)
     memset(&arg, 0, ARG_LEN);
     arg.cmd     = VIRTIO_CUDA_MUNMAPCTL;
     arg.src     = (uint64_t)blk->address;
-    arg.srcSize = blk->total_size;
-    arg.tid     = syscall(SYS_gettid);
+    arg.srcSize = (uint32_t)blk->total_size;
+    arg.tid     = (uint32_t)syscall(SYS_gettid);
     send_to_device(VIRTIO_IOC_MUNMAPCTL, &arg);
 }
 
 
 extern "C" void *malloc(size_t size)
 {
-    if (global==1) {
+    if (global_init==1) {
         debug("malloc 0x%lx\n", size);
         if (size > (KMALLOC_SIZE)<<2)
             return __mmalloc(size);
@@ -241,7 +241,7 @@ extern "C" void *malloc(size_t size)
 
 extern "C" void free(void *ptr)
 {
-    if(global == 1) {
+    if(global_init == 1) {
         BlockHeader* blk = NULL;
         // func();
         if (ptr == NULL)
@@ -266,7 +266,7 @@ int get_vdevice_count(int *result)
 {
     char fname[128]="/proc/virtio-cuda/virtual_device_count";
     char buf[15];
-    int size=0;
+    ssize_t size=0;
     int fdv=0;
     int count=0;
     fdv=open(fname, O_RDONLY);
@@ -307,7 +307,7 @@ static int open_vdevice()
             continue;
         }
         else
-            error("open device "DEVICE_FILE" failed, %s (%d)", 
+            error("open device %d failed, %s (%d)", 
                 i, (char *)strerror(errno), errno);
     }
     if(i > device_count) {
@@ -329,16 +329,17 @@ static void close_vdevice()
 
 void my_init(void) {
     debug("Init dynamic library.\n");
-    global = 1;
+    global_init = 1;
     map_offset=0;
     if(open_vdevice() < 0)
         exit(-1);
     pthread_spin_init(&lock, 0);
-    sgx_ecdh();
+    init_sgx_ecdh(&sgx_env);
 }
 
 void my_fini(void) {
     debug("deinit dynamic library\n");
+    fini_sgx_ecdh(sgx_env);
     close_vdevice();
 }
 
@@ -370,10 +371,10 @@ extern "C" void** __cudaRegisterFatBinary(void *fatCubin)
         // initialize arguments
         memset(&arg, 0, ARG_LEN);
         arg.src     = (uint64_t)(binary->data);
-        arg.srcSize = fatHeader->headerSize + fatHeader->fatSize;
+        arg.srcSize = (uint32_t)(fatHeader->headerSize + fatHeader->fatSize);
         arg.dstSize = 0;
         arg.cmd     = VIRTIO_CUDA_REGISTERFATBINARY;
-        arg.tid     = syscall(SYS_gettid);
+        arg.tid     = (uint32_t)syscall(SYS_gettid);
         send_to_device(VIRTIO_IOC_REGISTERFATBINARY, &arg);
         if(arg.cmd != cudaSuccess)
         {
@@ -441,10 +442,10 @@ extern "C" void __cudaRegisterFunction(
     memset(&arg, 0, ARG_LEN);
     arg.cmd     = VIRTIO_CUDA_REGISTERFUNCTION;
     arg.src     = (uint64_t)fatBinHeader;
-    arg.srcSize = fatBinHeader->fatSize + fatBinHeader->headerSize;
+    arg.srcSize = (uint32_t)(fatBinHeader->fatSize + fatBinHeader->headerSize);
     arg.dst     = (uint64_t)deviceName;
-    arg.dstSize = strlen(deviceName)+1; // +1 in order to keep \x00
-    arg.tid     = syscall(SYS_gettid);
+    arg.dstSize = (uint32_t)(strlen(deviceName)+1); // +1 in order to keep \x00
+    arg.tid     = (uint32_t)syscall(SYS_gettid);
     arg.flag    = (uint64_t)hostFun;
     send_to_device(VIRTIO_IOC_REGISTERFUNCTION, &arg);
     if(arg.cmd != cudaSuccess)
@@ -482,10 +483,10 @@ extern "C" void __cudaRegisterVar(
     memset(&arg, 0, ARG_LEN);
     arg.cmd     = VIRTIO_CUDA_REGISTERVAR;
     arg.src     = (uint64_t)fatBinHeader;
-    arg.srcSize = fatBinHeader->fatSize + fatBinHeader->headerSize;
+    arg.srcSize = (uint32_t)(fatBinHeader->fatSize + fatBinHeader->headerSize);
     arg.dst     = (uint64_t)deviceName;
-    arg.dstSize = strlen(deviceName)+1; // +1 in order to keep \x00
-    arg.tid     = syscall(SYS_gettid);
+    arg.dstSize = (uint32_t)(strlen(deviceName)+1); // +1 in order to keep \x00
+    arg.tid     = (uint32_t)syscall(SYS_gettid);
     arg.flag    = (uint64_t)hostVar;
     arg.param   = (uint64_t)constant;
     arg.param2  = (uint64_t)global;
@@ -496,7 +497,7 @@ extern "C" void __cudaRegisterVar(
     }
 }
 
-extern "C" void __cudaRegisterManagedVar(
+/*extern "C" void __cudaRegisterManagedVar(
     void **fatCubinHandle,
     void **hostVarPtrAddress,
     char  *deviceAddress,
@@ -509,9 +510,9 @@ extern "C" void __cudaRegisterManagedVar(
 {
     func();
     debug("Undefined\n");
-}
+}*/
 
-extern "C" void __cudaRegisterTexture(
+/*extern "C" void __cudaRegisterTexture(
     void                    **fatCubinHandle,
     const struct textureReference  *hostVar,
     const void                    **deviceAddress,
@@ -523,9 +524,9 @@ extern "C" void __cudaRegisterTexture(
 {
     func();
     debug("Undefined\n");
-}
+}*/
 
-extern "C" void __cudaRegisterSurface(
+/*extern "C" void __cudaRegisterSurface(
     void                    **fatCubinHandle,
     const struct surfaceReference  *hostVar,
     const void                    **deviceAddress,
@@ -536,15 +537,15 @@ extern "C" void __cudaRegisterSurface(
 {
     func();
     debug("Undefined\n");
-}
+}*/
 
-extern "C" char __cudaInitModule(void **fatCubinHandle)
+/*extern "C" char __cudaInitModule(void **fatCubinHandle)
 {
     func();
     return 'U';
-}
+}*/
 
-extern "C" cudaError_t  __cudaPopCallConfiguration(
+/*extern "C" cudaError_t  __cudaPopCallConfiguration(
   dim3         *gridDim,
   dim3         *blockDim,
   size_t       *sharedMem,
@@ -554,7 +555,7 @@ extern "C" cudaError_t  __cudaPopCallConfiguration(
     func();
     debug("Undefined\n");
     return cudaSuccess;
-}
+}*/
 
 extern "C" unsigned  __cudaPushCallConfiguration(
     dim3         gridDim,
@@ -614,16 +615,16 @@ extern "C" cudaError_t cudaSetupArgument(const void* arg, size_t size, size_t of
 */
     memcpy(&cudaKernelPara[cudaParaSize], &size, sizeof(uint32_t));
     debug("size = %u\n", *(uint32_t*)&cudaKernelPara[cudaParaSize]);
-    cudaParaSize += sizeof(uint32_t);
+    cudaParaSize += (uint32_t)sizeof(uint32_t);
     
     memcpy(&cudaKernelPara[cudaParaSize], arg, size);
     debug("value = 0x%llx\n", *(unsigned long long*)&cudaKernelPara[cudaParaSize]);
-    cudaParaSize += size;
+    cudaParaSize += (uint32_t)size;
     (*((uint32_t*)cudaKernelPara))++;
     return cudaSuccess;
 }
 
-extern "C" cudaError_t cudaLaunchKernel(
+/*extern "C" cudaError_t cudaLaunchKernel(
     const void *func,
     dim3 gridDim,
     dim3 blockDim,
@@ -632,15 +633,10 @@ extern "C" cudaError_t cudaLaunchKernel(
     cudaStream_t stream
 )
 {
-    // uint64_t fid;
     func();
-    // fid=(uint64_t)func;
-    // debug("func id = 0x%lx\n", fid);
-    debug("szieof(args)   =0x%lx\n", sizeof(args));
-    debug("szieof(args[0])=0x%lx\n", sizeof(args[0]));
-
     return cudaSuccess;
 }
+*/
 
 extern "C" cudaError_t cudaLaunch(const void *entry)
 {
@@ -668,14 +664,14 @@ extern "C" cudaError_t cudaLaunch(const void *entry)
             debug("value=%llx\n",*(unsigned long long*)&para[para_idx+sizeof(uint32_t)]);
         else
             debug("value=%x\n",*(unsigned int*)&para[para_idx+sizeof(uint32_t)]);
-        para_idx += *(uint32_t*)(&para[para_idx]) + sizeof(uint32_t);
+        para_idx += (uint32_t)(*(uint32_t*)(&para[para_idx]) + sizeof(uint32_t));
     }
 
-    arg.srcSize = cudaParaSize;
+    arg.srcSize = (uint32_t)cudaParaSize;
     arg.dst     = (uint64_t)&kernelConf;
-    arg.dstSize = sizeof(KernelConf_t);
+    arg.dstSize = (uint32_t)sizeof(KernelConf_t);
     arg.flag    = (uint64_t)entry;
-    arg.tid     = syscall(SYS_gettid);
+    arg.tid     = (uint32_t)syscall(SYS_gettid);
     send_to_device(VIRTIO_IOC_LAUNCH, &arg);
     return (cudaError_t)arg.cmd;    
 }
@@ -693,10 +689,10 @@ extern "C" cudaError_t cudaMemcpy(void *dst, const void *src, size_t count, enum
     arg.cmd     = VIRTIO_CUDA_MEMCPY;
     arg.flag    = kind;
     arg.src     = (uint64_t)src;
-    arg.srcSize = count;
+    arg.srcSize = (uint32_t)count;
     arg.dst     = (uint64_t)dst;
-    arg.dstSize = count;
-    arg.tid     = syscall(SYS_gettid);
+    arg.dstSize = (uint32_t)count;
+    arg.tid     = (uint32_t)syscall(SYS_gettid);
     debug("gettid %d\n", arg.tid);
     send_to_device(VIRTIO_IOC_MEMCPY, &arg);
     if (arg.flag == cudaMemcpyHostToHost) {
@@ -718,12 +714,12 @@ extern "C" cudaError_t cudaMemcpyToSymbol( const void *symbol, const void *src,
     arg.cmd     = VIRTIO_CUDA_MEMCPYTOSYMBOL;
     arg.flag    = kind;
     arg.src     = (uint64_t)src;
-    arg.srcSize = count;
+    arg.srcSize = (uint32_t)count;
     debug("symbol is %p\n", symbol);
     arg.dst     = (uint64_t)symbol;
     arg.dstSize = 0;
     arg.param   = offset;
-    arg.tid     = syscall(SYS_gettid);
+    arg.tid     = (uint32_t)syscall(SYS_gettid);
     send_to_device(VIRTIO_IOC_MEMCPYTOSYMBOL, &arg);
     return (cudaError_t)arg.cmd;    
 }
@@ -742,9 +738,9 @@ extern "C" cudaError_t cudaMemcpyFromSymbol(   void *dst, const void *symbol,
     debug("symbol is %p\n", symbol);
     arg.src     = (uint64_t)symbol;
     arg.dst     = (uint64_t)dst;
-    arg.dstSize = count;
-    arg.param   = offset;
-    arg.tid     = syscall(SYS_gettid);
+    arg.dstSize = (uint32_t)count;
+    arg.param   = (uint64_t)offset;
+    arg.tid     = (uint32_t)syscall(SYS_gettid);
     send_to_device(VIRTIO_IOC_MEMCPYFROMSYMBOL, &arg);
     return (cudaError_t)arg.cmd;    
 }
@@ -758,9 +754,9 @@ extern "C" cudaError_t cudaMemset(void *dst, int value, size_t count)
     memset(&arg, 0, sizeof(VirtIOArg));
     arg.cmd     = VIRTIO_CUDA_MEMSET;
     arg.dst     = (uint64_t)dst;
-    arg.param   = count;
+    arg.param   = (uint32_t)count;
     arg.param2  = (uint64_t)value;
-    arg.tid     = syscall(SYS_gettid);
+    arg.tid     = (uint32_t)syscall(SYS_gettid);
     send_to_device(VIRTIO_IOC_MEMSET, &arg);
     return (cudaError_t)arg.cmd;    
 }
@@ -785,11 +781,11 @@ extern "C" cudaError_t cudaMemcpyAsync(
     arg.cmd     = VIRTIO_CUDA_MEMCPY_ASYNC;
     arg.flag    = kind;
     arg.src     = (uint64_t)src;
-    arg.srcSize = count;
+    arg.srcSize = (uint32_t)count;
     arg.dst     = (uint64_t)dst;
     arg.src2    = (uint64_t)stream;
     arg.param   = (uint64_t)stream;
-    arg.tid     = syscall(SYS_gettid);
+    arg.tid     = (uint32_t)syscall(SYS_gettid);
     send_to_device(VIRTIO_IOC_MEMCPY_ASYNC, &arg);
     if (arg.flag == cudaMemcpyHostToHost) {
         memcpy(dst, src, count);
@@ -805,8 +801,8 @@ extern "C" cudaError_t cudaMalloc(void **devPtr, size_t size)
     memset(&arg, 0, sizeof(VirtIOArg));
     arg.cmd     = VIRTIO_CUDA_MALLOC;
     arg.src     = (uint64_t)NULL;
-    arg.srcSize = size;
-    arg.tid     = syscall(SYS_gettid);
+    arg.srcSize = (uint32_t)size;
+    arg.tid     = (uint32_t)syscall(SYS_gettid);
     debug("tid %d\n", arg.tid);
     send_to_device(VIRTIO_IOC_MALLOC, &arg);
     *devPtr = (void *)arg.dst;
@@ -821,10 +817,10 @@ extern "C" cudaError_t cudaHostRegister(void *ptr, size_t size, unsigned int fla
         return cudaSuccess;
     memset(&arg, 0, sizeof(VirtIOArg));
     arg.cmd     = VIRTIO_CUDA_HOSTREGISTER;
-    arg.tid     = syscall(SYS_gettid);
+    arg.tid     = (uint32_t)syscall(SYS_gettid);
     arg.src     = (uint64_t)ptr;
-    arg.srcSize = size;
-    arg.flag    = flags;
+    arg.srcSize = (uint32_t)size;
+    arg.flag    = (uint64_t)flags;
     send_to_device(VIRTIO_IOC_HOSTREGISTER, &arg);
     return (cudaError_t)arg.cmd;
 }
@@ -837,7 +833,7 @@ extern "C" cudaError_t cudaHostUnregister(void *ptr)
         return cudaSuccess;
     memset(&arg, 0, sizeof(VirtIOArg));
     arg.cmd = VIRTIO_CUDA_HOSTUNREGISTER;
-    arg.tid = syscall(SYS_gettid);
+    arg.tid = (uint32_t)syscall(SYS_gettid);
     arg.src = (uint64_t)ptr;
     arg.srcSize = 0;
     send_to_device(VIRTIO_IOC_HOSTUNREGISTER, &arg);
@@ -894,7 +890,7 @@ extern "C" cudaError_t cudaFree(void *devPtr)
     arg.cmd     = VIRTIO_CUDA_FREE;
     arg.src     = (uint64_t)devPtr;
     arg.srcSize = 0;
-    arg.tid     = syscall(SYS_gettid);
+    arg.tid     = (uint32_t)syscall(SYS_gettid);
     send_to_device(VIRTIO_IOC_FREE, &arg);
     return (cudaError_t)arg.cmd;    
 }
@@ -905,7 +901,7 @@ extern "C" cudaError_t cudaGetDevice(int *device)
     func();
     memset(&arg, 0, sizeof(VirtIOArg));
     arg.cmd     = VIRTIO_CUDA_GETDEVICE;
-    arg.tid     = syscall(SYS_gettid);
+    arg.tid     = (uint32_t)syscall(SYS_gettid);
     send_to_device(VIRTIO_IOC_GETDEVICE, &arg);
     *device     = (int)arg.flag;
     return (cudaError_t)arg.cmd;
@@ -920,7 +916,7 @@ extern "C" cudaError_t cudaGetDeviceProperties(struct cudaDeviceProp *prop, int 
     arg.dst     = (uint64_t)prop;
     arg.dstSize = sizeof(struct cudaDeviceProp);
     arg.flag    = device;
-    arg.tid     = syscall(SYS_gettid);
+    arg.tid     = (uint32_t)syscall(SYS_gettid);
     send_to_device(VIRTIO_IOC_GETDEVICEPROPERTIES, &arg);
     if(!prop)
         return cudaErrorInvalidDevice;
@@ -934,7 +930,7 @@ extern "C" cudaError_t cudaSetDevice(int device)
     memset(&arg, 0, sizeof(VirtIOArg));
     arg.cmd     = VIRTIO_CUDA_SETDEVICE;
     arg.flag    = device;
-    arg.tid     = syscall(SYS_gettid);
+    arg.tid     = (uint32_t)syscall(SYS_gettid);
     debug("gettid %d\n", arg.tid);
     send_to_device(VIRTIO_IOC_SETDEVICE, &arg);
     return (cudaError_t)arg.cmd;    
@@ -946,9 +942,9 @@ extern "C" cudaError_t cudaGetDeviceCount(int *count)
     func();
     memset(&arg, 0, sizeof(VirtIOArg));
     arg.cmd = VIRTIO_CUDA_GETDEVICECOUNT;
-    arg.tid = syscall(SYS_gettid);
+    arg.tid = (uint32_t)syscall(SYS_gettid);
     send_to_device(VIRTIO_IOC_GETDEVICECOUNT, &arg);
-    *count  = arg.flag;
+    *count  = (int)arg.flag;
     return (cudaError_t)arg.cmd;    
 }
 
@@ -958,7 +954,7 @@ extern "C" cudaError_t cudaDeviceReset(void)
     func();
     memset(&arg, 0, sizeof(VirtIOArg));
     arg.cmd = VIRTIO_CUDA_DEVICERESET;
-    arg.tid = syscall(SYS_gettid);
+    arg.tid = (uint32_t)syscall(SYS_gettid);
     send_to_device(VIRTIO_IOC_DEVICERESET, &arg);
     return cudaSuccess; 
 }
@@ -969,7 +965,7 @@ extern "C" cudaError_t cudaDeviceSynchronize(void)
     func();
     memset(&arg, 0, sizeof(VirtIOArg));
     arg.cmd = VIRTIO_CUDA_DEVICESYNCHRONIZE;
-    arg.tid = syscall(SYS_gettid);
+    arg.tid = (uint32_t)syscall(SYS_gettid);
     send_to_device(VIRTIO_IOC_DEVICESYNCHRONIZE, &arg);
     return (cudaError_t)arg.cmd;    
 }
@@ -980,7 +976,7 @@ extern "C" cudaError_t cudaStreamCreate(cudaStream_t *pStream)
     func();
     memset(&arg, 0, sizeof(VirtIOArg));
     arg.cmd = VIRTIO_CUDA_STREAMCREATE;
-    arg.tid = syscall(SYS_gettid);
+    arg.tid = (uint32_t)syscall(SYS_gettid);
     send_to_device(VIRTIO_IOC_STREAMCREATE, &arg);
     *pStream = (cudaStream_t)arg.flag;
     debug("stream = 0x%lx\n", (uint64_t)(*pStream));
@@ -994,7 +990,7 @@ extern "C" cudaError_t cudaStreamCreateWithFlags(cudaStream_t *pStream, unsigned
     memset(&arg, 0, sizeof(VirtIOArg));
     arg.cmd     = VIRTIO_CUDA_STREAMCREATEWITHFLAGS;
     arg.flag    = flags;
-    arg.tid     = syscall(SYS_gettid);
+    arg.tid     = (uint32_t)syscall(SYS_gettid);
     send_to_device(VIRTIO_IOC_STREAMCREATEWITHFLAGS, &arg);
      *pStream   = (cudaStream_t)arg.dst;
      debug("stream = 0x%lx\n", (uint64_t)(*pStream));
@@ -1011,7 +1007,7 @@ extern "C" cudaError_t cudaStreamDestroy(cudaStream_t stream)
     memset(&arg, 0, sizeof(VirtIOArg));
     arg.cmd     = VIRTIO_CUDA_STREAMDESTROY;
     arg.flag    = (uint64_t)stream;
-    arg.tid     = syscall(SYS_gettid);
+    arg.tid     = (uint32_t)syscall(SYS_gettid);
     send_to_device(VIRTIO_IOC_STREAMDESTROY, &arg);
     return (cudaError_t)arg.cmd;    
 }
@@ -1023,7 +1019,7 @@ extern "C" cudaError_t cudaStreamSynchronize(cudaStream_t stream)
     memset(&arg, 0, sizeof(VirtIOArg));
     arg.cmd     = VIRTIO_CUDA_STREAMSYNCHRONIZE;
     arg.flag    = (uint64_t)stream;
-    arg.tid     = syscall(SYS_gettid);
+    arg.tid     = (uint32_t)syscall(SYS_gettid);
     send_to_device(VIRTIO_IOC_STREAMSYNCHRONIZE, &arg);
     return (cudaError_t)arg.cmd;    
 }
@@ -1038,7 +1034,7 @@ extern "C" cudaError_t cudaStreamWaitEvent(cudaStream_t stream,
     assert(flags == 0);
     memset(&arg, 0, sizeof(VirtIOArg));
     arg.cmd = VIRTIO_CUDA_STREAMWAITEVENT;
-    arg.tid = syscall(SYS_gettid);
+    arg.tid = (uint32_t)syscall(SYS_gettid);
     arg.src = (uint64_t)stream;
     arg.dst = (uint64_t)event;
     send_to_device(VIRTIO_IOC_STREAMWAITEVENT, &arg);
@@ -1051,7 +1047,7 @@ extern "C" cudaError_t cudaEventCreate(cudaEvent_t *event)
     func();
     memset(&arg, 0, sizeof(VirtIOArg));
     arg.cmd = VIRTIO_CUDA_EVENTCREATE;
-    arg.tid = syscall(SYS_gettid);
+    arg.tid = (uint32_t)syscall(SYS_gettid);
     send_to_device(VIRTIO_IOC_EVENTCREATE, &arg);
     *event = (cudaEvent_t)arg.flag;
     debug("tid %d create event is 0x%lx\n", arg.tid, (uint64_t)(*event));
@@ -1065,7 +1061,7 @@ extern "C" cudaError_t cudaEventCreateWithFlags(cudaEvent_t *event, unsigned int
     memset(&arg, 0, sizeof(VirtIOArg));
     arg.cmd     = VIRTIO_CUDA_EVENTCREATEWITHFLAGS;
     arg.flag    = (uint64_t)flags;
-    arg.tid     = syscall(SYS_gettid);
+    arg.tid     = (uint32_t)syscall(SYS_gettid);
     send_to_device(VIRTIO_IOC_EVENTCREATEWITHFLAGS, &arg);
     *event  = (cudaEvent_t)arg.dst;
     debug("event is 0x%lx\n", (uint64_t)(*event));
@@ -1081,7 +1077,7 @@ extern "C" cudaError_t cudaEventDestroy(cudaEvent_t event)
     memset(&arg, 0, sizeof(VirtIOArg));
     arg.cmd     = VIRTIO_CUDA_EVENTDESTROY;
     arg.flag    = (uint64_t)event;
-    arg.tid     = syscall(SYS_gettid);
+    arg.tid     = (uint32_t)syscall(SYS_gettid);
     debug("tid %d destroy event is 0x%lx\n", arg.tid, (uint64_t)(event));
     send_to_device(VIRTIO_IOC_EVENTDESTROY, &arg);
     return (cudaError_t)arg.cmd;
@@ -1100,7 +1096,7 @@ extern "C" cudaError_t cudaEventRecord(cudaEvent_t event, cudaStream_t stream)
     debug("stream = 0x%lx\n", (uint64_t)stream);
     arg.src = (uint64_t)event;
     arg.dst = (uint64_t)stream;
-    arg.tid = syscall(SYS_gettid);
+    arg.tid = (uint32_t)syscall(SYS_gettid);
     send_to_device(VIRTIO_IOC_EVENTRECORD, &arg);
     return (cudaError_t)arg.cmd;    
 }
@@ -1114,7 +1110,7 @@ extern "C" cudaError_t cudaEventSynchronize(cudaEvent_t event)
     memset(&arg, 0, sizeof(VirtIOArg));
     arg.cmd     = VIRTIO_CUDA_EVENTSYNCHRONIZE;
     arg.flag    = (uint64_t)event;
-    arg.tid     = syscall(SYS_gettid);
+    arg.tid     = (uint32_t)syscall(SYS_gettid);
     send_to_device(VIRTIO_IOC_EVENTSYNCHRONIZE, &arg);
     return (cudaError_t)arg.cmd;    
 }
@@ -1128,7 +1124,7 @@ extern "C" cudaError_t cudaEventQuery(cudaEvent_t event)
     memset(&arg, 0, sizeof(VirtIOArg));
     arg.cmd     = VIRTIO_CUDA_EVENTQUERY;
     arg.flag    = (uint64_t)event;
-    arg.tid     = syscall(SYS_gettid);
+    arg.tid     = (uint32_t)syscall(SYS_gettid);
     send_to_device(VIRTIO_IOC_EVENTQUERY, &arg);
     return (cudaError_t)arg.cmd;    
 }
@@ -1141,7 +1137,7 @@ extern "C" cudaError_t cudaEventElapsedTime(float *ms, cudaEvent_t start, cudaEv
         return cudaSuccess;
     memset(&arg, 0, sizeof(VirtIOArg));
     arg.cmd = VIRTIO_CUDA_EVENTELAPSEDTIME;
-    arg.tid = syscall(SYS_gettid);
+    arg.tid = (uint32_t)syscall(SYS_gettid);
     arg.src = (uint64_t)start;
     arg.dst = (uint64_t)end;
     arg.param       = (uint64_t)ms;
@@ -1157,7 +1153,7 @@ extern "C" cudaError_t cudaThreadSynchronize()
     func();
     memset(&arg, 0, sizeof(VirtIOArg));
     arg.cmd = VIRTIO_CUDA_THREADSYNCHRONIZE;
-    arg.tid = syscall(SYS_gettid);
+    arg.tid = (uint32_t)syscall(SYS_gettid);
     send_to_device(VIRTIO_IOC_THREADSYNCHRONIZE, &arg);
     return (cudaError_t)arg.cmd;
 }
@@ -1168,7 +1164,7 @@ extern "C" cudaError_t cudaGetLastError(void)
     func();
     memset(&arg, 0, sizeof(VirtIOArg));
     arg.cmd = VIRTIO_CUDA_GETLASTERROR;
-    arg.tid = syscall(SYS_gettid);
+    arg.tid = (uint32_t)syscall(SYS_gettid);
     send_to_device(VIRTIO_IOC_GETLASTERROR, &arg);
     return (cudaError_t)arg.cmd;
 }
@@ -1179,7 +1175,7 @@ extern "C" cudaError_t cudaPeekAtLastError(void)
     func();
     memset(&arg, 0, sizeof(VirtIOArg));
     arg.cmd = VIRTIO_CUDA_PEEKATLASTERROR;
-    arg.tid = syscall(SYS_gettid);
+    arg.tid = (uint32_t)syscall(SYS_gettid);
     send_to_device(VIRTIO_IOC_PEEKATLASTERROR, &arg);
     return (cudaError_t)arg.cmd;
 }
@@ -1190,7 +1186,7 @@ extern "C" cudaError_t cudaMemGetInfo(size_t *free, size_t *total)
     func();
     memset(&arg, 0, sizeof(VirtIOArg));
     arg.cmd = VIRTIO_CUDA_MEMGETINFO;
-    arg.tid = syscall(SYS_gettid);
+    arg.tid = (uint32_t)syscall(SYS_gettid);
     send_to_device(VIRTIO_IOC_MEMGETINFO, &arg);
     *free   = (size_t)arg.srcSize;
     *total  = (size_t)arg.dstSize;
@@ -1204,7 +1200,7 @@ extern "C" cudaError_t cudaSetDeviceFlags(unsigned int flags)
     func();
     memset(&arg, 0, sizeof(VirtIOArg));
     arg.cmd     = VIRTIO_CUDA_SETDEVICEFLAGS;
-    arg.tid     = syscall(SYS_gettid);
+    arg.tid     = (uint32_t)syscall(SYS_gettid);
     arg.flag    = (uint64_t)flags;
     send_to_device(VIRTIO_IOC_SETDEVICEFLAGS, &arg);
     return (cudaError_t)arg.cmd;
@@ -1483,6 +1479,7 @@ extern "C" CUBLASAPI cublasStatus_t cublasCreate_v2 (cublasHandle_t *handle)
     arg.cmd     = VIRTIO_CUBLAS_CREATE;
     arg.srcSize = sizeof(cublasHandle_t);
     arg.src     = (uint64_t)handle;
+    arg.tid     = (uint32_t)syscall(SYS_gettid);
     // debug("sizeof(cublasHandle_t)=%lx\n", sizeof(cublasHandle_t));
     send_to_device(VIRTIO_IOC_CUBLAS_CREATE, &arg);
     return (cublasStatus_t)arg.cmd;
@@ -1496,6 +1493,7 @@ extern "C" CUBLASAPI cublasStatus_t cublasDestroy_v2 (cublasHandle_t handle)
     arg.cmd     = VIRTIO_CUBLAS_DESTROY;
     arg.srcSize = sizeof(cublasHandle_t);
     arg.src     = (uint64_t)&handle;
+    arg.tid = (uint32_t)syscall(SYS_gettid);
     send_to_device(VIRTIO_IOC_CUBLAS_DESTROY, &arg);
     return (cublasStatus_t)arg.cmd;
 }
@@ -1525,6 +1523,7 @@ extern "C" CUBLASAPI cublasStatus_t cublasSetVector (int n, int elemSize, const 
     memcpy(buf+idx, &incy, int_size);
     arg.param       = (uint64_t)buf;
     arg.paramSize   = len;
+    arg.tid = (uint32_t)syscall(SYS_gettid);
     send_to_device(VIRTIO_IOC_CUBLAS_SETVECTOR, &arg);
     __libc_free(buf);
     return (cublasStatus_t)arg.cmd;
@@ -1555,6 +1554,7 @@ extern "C" CUBLASAPI cublasStatus_t cublasGetVector (int n, int elemSize, const 
     memcpy(buf+idx, &incy, int_size);
     arg.param       = (uint64_t)buf;
     arg.paramSize   = len;
+    arg.tid = (uint32_t)syscall(SYS_gettid);
     send_to_device(VIRTIO_IOC_CUBLAS_GETVECTOR, &arg);
     __libc_free(buf);
     return (cublasStatus_t)arg.cmd;
@@ -1569,7 +1569,7 @@ extern "C" CUBLASAPI cublasStatus_t cublasSetStream_v2 (cublasHandle_t handle, c
     debug("stream = 0x%lx\n", (uint64_t)streamId);
     arg.src = (uint64_t)handle;
     arg.dst = (uint64_t)streamId;
-    arg.tid = syscall(SYS_gettid);
+    arg.tid = (uint32_t)syscall(SYS_gettid);
     send_to_device(VIRTIO_IOC_CUBLAS_SETSTREAM, &arg);
     return (cublasStatus_t)arg.cmd; 
 }
@@ -1583,7 +1583,7 @@ extern "C" CUBLASAPI cublasStatus_t cublasGetStream_v2 (cublasHandle_t handle, c
     arg.cmd = VIRTIO_CUBLAS_GETSTREAM;
     debug("stream = 0x%lx\n", (uint64_t)streamId);
     arg.src = (uint64_t)handle;
-    arg.tid = syscall(SYS_gettid);
+    arg.tid = (uint32_t)syscall(SYS_gettid);
     send_to_device(VIRTIO_IOC_CUBLAS_GETSTREAM, &arg);
     *streamId = (cudaStream_t)arg.flag;
     return (cublasStatus_t)arg.cmd;
@@ -1871,13 +1871,13 @@ extern "C" CUBLASAPI cublasStatus_t cublasSgemv_v2 (cublasHandle_t handle,
     arg.dst     = (uint64_t)y;
     arg.dstSize = m;
 
-    len = int_size * 3 + sizeof(cublasHandle_t) + 
-            sizeof(cublasOperation_t) + sizeof(float)*2;
+    len = (uint32_t)(int_size * 3 + sizeof(cublasHandle_t) + 
+            sizeof(cublasOperation_t) + sizeof(float)*2);
     buf = (uint8_t *)__libc_malloc(len);
     memcpy(buf+idx, &handle, sizeof(cublasHandle_t));
-    idx += sizeof(cublasHandle_t);
+    idx += (uint32_t)sizeof(cublasHandle_t);
     memcpy(buf+idx, &trans, sizeof(cublasOperation_t));
-    idx += sizeof(cublasOperation_t);
+    idx += (uint32_t)sizeof(cublasOperation_t);
     memcpy(buf+idx, &lda, int_size);
     idx += int_size;
     memcpy(buf+idx, &incx, int_size);
@@ -1885,7 +1885,7 @@ extern "C" CUBLASAPI cublasStatus_t cublasSgemv_v2 (cublasHandle_t handle,
     memcpy(buf+idx, &incy, int_size);
     idx += int_size;
     memcpy(buf+idx, alpha, sizeof(float));
-    idx += sizeof(float);
+    idx += (uint32_t)sizeof(float);
     memcpy(buf+idx, beta, sizeof(float));
     arg.param       = (uint64_t)buf;
     arg.paramSize   = (uint32_t)len;
@@ -1909,9 +1909,9 @@ extern "C" CUBLASAPI cublasStatus_t cublasDgemv_v2 (cublasHandle_t handle,
 {
     VirtIOArg arg;
     uint8_t *buf = NULL;
-    int len = 0;
-    int idx = 0;
-    int int_size = sizeof(int);
+    uint32_t len = 0;
+    uint32_t idx = 0;
+    uint32_t int_size = sizeof(int);
 
     func();
     memset(&arg, 0, sizeof(VirtIOArg));
@@ -1922,13 +1922,13 @@ extern "C" CUBLASAPI cublasStatus_t cublasDgemv_v2 (cublasHandle_t handle,
     arg.srcSize2 = (uint32_t)n;
     arg.dst     = (uint64_t)y;
     arg.dstSize = (uint32_t)m;
-    len = int_size * 3 + sizeof(cublasHandle_t) + 
-            sizeof(cublasOperation_t)+ sizeof(double)*2;
+    len = (uint32_t)(int_size * 3 + sizeof(cublasHandle_t) + 
+            sizeof(cublasOperation_t)+ sizeof(double)*2);
     buf = (uint8_t *)__libc_malloc(len);
     memcpy(buf+idx, &handle, sizeof(cublasHandle_t));
-    idx += sizeof(cublasHandle_t);
+    idx += (uint32_t)sizeof(cublasHandle_t);
     memcpy(buf+idx, &trans, sizeof(cublasOperation_t));
-    idx += sizeof(cublasOperation_t);
+    idx += (uint32_t)sizeof(cublasOperation_t);
     memcpy(buf+idx, &lda, int_size);
     idx += int_size;
     memcpy(buf+idx, &incx, int_size);
@@ -1936,7 +1936,7 @@ extern "C" CUBLASAPI cublasStatus_t cublasDgemv_v2 (cublasHandle_t handle,
     memcpy(buf+idx, &incy, int_size);
     idx += int_size;
     memcpy(buf+idx, alpha, sizeof(double));
-    idx += sizeof(double);
+    idx += (uint32_t)sizeof(double);
     memcpy(buf+idx, beta, sizeof(double));
     arg.param       = (uint64_t)buf;
     arg.paramSize   = len;
@@ -1963,9 +1963,9 @@ extern "C" CUBLASAPI cublasStatus_t cublasSgemm_v2 (cublasHandle_t handle,
 {
     VirtIOArg arg;
     uint8_t *buf = NULL;
-    int len = 0;
-    int idx = 0;
-    int int_size = sizeof(int);
+    uint32_t len = 0;
+    uint32_t idx = 0;
+    uint32_t int_size = sizeof(int);
 
     func();
     memset(&arg, 0, sizeof(VirtIOArg));
@@ -1976,15 +1976,15 @@ extern "C" CUBLASAPI cublasStatus_t cublasSgemm_v2 (cublasHandle_t handle,
     arg.srcSize2 = k * n;
     arg.dst     = (uint64_t)C;
     arg.dstSize = m * n;
-    len = int_size * 6 + sizeof(cublasHandle_t) + 
-            sizeof(cublasOperation_t)*2 + sizeof(float)*2;
+    len = int_size * 6 + (uint32_t)sizeof(cublasHandle_t) + 
+            (uint32_t)sizeof(cublasOperation_t)*2 + (uint32_t)sizeof(float)*2;
     buf = (uint8_t *)__libc_malloc(len);
     memcpy(buf+idx, &handle, sizeof(cublasHandle_t));
-    idx += sizeof(cublasHandle_t);
+    idx += (uint32_t)sizeof(cublasHandle_t);
     memcpy(buf+idx, &transa, sizeof(cublasOperation_t));
-    idx += sizeof(cublasOperation_t);
+    idx += (uint32_t)sizeof(cublasOperation_t);
     memcpy(buf+idx, &transb, sizeof(cublasOperation_t));
-    idx += sizeof(cublasOperation_t);
+    idx += (uint32_t)sizeof(cublasOperation_t);
     memcpy(buf+idx, &m, int_size);
     idx += int_size;
     memcpy(buf+idx, &n, int_size);
@@ -1998,7 +1998,7 @@ extern "C" CUBLASAPI cublasStatus_t cublasSgemm_v2 (cublasHandle_t handle,
     memcpy(buf+idx, &ldc, int_size);
     idx += int_size;
     memcpy(buf+idx, alpha, sizeof(float));
-    idx += sizeof(float);
+    idx += (uint32_t)sizeof(float);
     memcpy(buf+idx, beta, sizeof(float));
     arg.param       = (uint64_t)buf;
     arg.paramSize   = len;
@@ -2024,9 +2024,9 @@ extern "C" CUBLASAPI cublasStatus_t cublasDgemm_v2 (cublasHandle_t handle,
 {
     VirtIOArg arg;
     uint8_t *buf = NULL;
-    int len = 0;
-    int idx = 0;
-    int int_size = sizeof(int);
+    uint64_t len = 0;
+    uint64_t idx = 0;
+    uint32_t int_size = sizeof(int);
 
     func();
     memset(&arg, 0, sizeof(VirtIOArg));
@@ -2062,7 +2062,7 @@ extern "C" CUBLASAPI cublasStatus_t cublasDgemm_v2 (cublasHandle_t handle,
     idx += sizeof(double);
     memcpy(buf+idx, beta, sizeof(double));
     arg.param       = (uint64_t)buf;
-    arg.paramSize   = len;
+    arg.paramSize   = (uint32_t)len;
     send_to_device(VIRTIO_IOC_CUBLAS_DGEMM, &arg);
     __libc_free(buf);
     return (cublasStatus_t)arg.cmd;
@@ -2074,9 +2074,9 @@ extern "C" cublasStatus_t cublasSetMatrix (int rows, int cols, int elemSize,
 {
     VirtIOArg arg;
     uint8_t *buf = NULL;
-    int len = 0;
-    int idx = 0;
-    int int_size = sizeof(int);
+    uint32_t len = 0;
+    uint32_t idx = 0;
+    uint32_t int_size = sizeof(int);
     func();
     memset(&arg, 0, sizeof(VirtIOArg));
     arg.cmd     = VIRTIO_CUBLAS_SETMATRIX;
@@ -2107,9 +2107,9 @@ extern "C" cublasStatus_t cublasGetMatrix (int rows, int cols, int elemSize,
 {
     VirtIOArg arg;
     uint8_t *buf = NULL;
-    int len = 0;
-    int idx = 0;
-    int int_size = sizeof(int);
+    uint32_t len = 0;
+    uint32_t idx = 0;
+    uint32_t int_size = sizeof(int);
     func();
     memset(&arg, 0, sizeof(VirtIOArg));
     arg.cmd     = VIRTIO_CUBLAS_GETMATRIX;
@@ -2185,8 +2185,8 @@ curandGenerateNormal(curandGenerator_t generator, float *outputPtr,
 {
     VirtIOArg arg;
     uint8_t *buf = NULL;
-    int len = 0;
-    int idx = 0;
+    uint64_t len = 0;
+    uint64_t idx = 0;
 
     func();
     memset(&arg, 0, sizeof(VirtIOArg));
@@ -2201,7 +2201,7 @@ curandGenerateNormal(curandGenerator_t generator, float *outputPtr,
     idx += sizeof(float);
     memcpy(buf+idx, &stddev, sizeof(float));
     arg.param       = (uint64_t)buf;
-    arg.paramSize   = len;
+    arg.paramSize   = (uint32_t)len;
     send_to_device(VIRTIO_IOC_CURAND_GENERATENORMAL, &arg);
     __libc_free(buf);
     return (curandStatus_t)arg.cmd;
@@ -2213,8 +2213,8 @@ curandGenerateNormalDouble(curandGenerator_t generator, double *outputPtr,
 {
     VirtIOArg arg;
     uint8_t *buf = NULL;
-    int len = 0;
-    int idx = 0;
+    uint64_t len = 0;
+    uint64_t idx = 0;
 
     func();
     memset(&arg, 0, sizeof(VirtIOArg));
@@ -2229,7 +2229,7 @@ curandGenerateNormalDouble(curandGenerator_t generator, double *outputPtr,
     idx += sizeof(double);
     memcpy(buf+idx, &stddev, sizeof(double));
     arg.param       = (uint64_t)buf;
-    arg.paramSize   = len;
+    arg.paramSize   = (uint32_t)len;
     send_to_device(VIRTIO_IOC_CURAND_GENERATENORMALDOUBLE, &arg);
     __libc_free(buf);
     return (curandStatus_t)arg.cmd;
@@ -2305,17 +2305,7 @@ curandSetPseudoRandomGeneratorSeed(curandGenerator_t generator, unsigned long lo
 
 //**************************SGX**********************************************//
 //***************************************************************************//
-//***************************************************************************//
 
-
-uint8_t* msg1_samples[] = { msg1_sample1, msg1_sample2 };
-uint8_t* msg2_samples[] = { msg2_sample1, msg2_sample2 };
-uint8_t* msg3_samples[] = { msg3_sample1, msg3_sample2 };
-uint8_t* attestation_msg_samples[] =
-    { attestation_msg_sample1, attestation_msg_sample2};
-
-// Some utility functions to output some of the data structures passed between
-// the ISV app and the remote attestation service provider.
 void PRINT_BYTE_ARRAY(
     FILE *file, void *mem, uint32_t len)
 {
@@ -2336,113 +2326,85 @@ void PRINT_BYTE_ARRAY(
     fprintf(file, "\n}\n");
 }
 
-
-void PRINT_ATTESTATION_SERVICE_RESPONSE(
-    FILE *file,
-    ra_samp_response_header_t *response)
-{
-    if(!response)
-    {
-        fprintf(file, "\t\n( null )\n");
-        return;
-    }
-
-    fprintf(file, "RESPONSE TYPE:   0x%x\n", response->type);
-    fprintf(file, "RESPONSE STATUS: 0x%x 0x%x\n", response->status[0],
-            response->status[1]);
-    fprintf(file, "RESPONSE BODY SIZE: %u\n", response->size);
-
-    if(response->type == TYPE_RA_MSG2)
-    {
-        sgx_ra_msg2_t* p_msg2_body = (sgx_ra_msg2_t*)(response->body);
-
-        fprintf(file, "MSG2 gb - ");
-        PRINT_BYTE_ARRAY(file, &(p_msg2_body->g_b), sizeof(p_msg2_body->g_b));
-
-        fprintf(file, "MSG2 spid - ");
-        PRINT_BYTE_ARRAY(file, &(p_msg2_body->spid), sizeof(p_msg2_body->spid));
-
-        fprintf(file, "MSG2 quote_type : %hx\n", p_msg2_body->quote_type);
-
-        fprintf(file, "MSG2 kdf_id : %hx\n", p_msg2_body->kdf_id);
-
-        fprintf(file, "MSG2 sign_gb_ga - ");
-        PRINT_BYTE_ARRAY(file, &(p_msg2_body->sign_gb_ga),
-                         sizeof(p_msg2_body->sign_gb_ga));
-
-        fprintf(file, "MSG2 mac - ");
-        PRINT_BYTE_ARRAY(file, &(p_msg2_body->mac), sizeof(p_msg2_body->mac));
-
-        fprintf(file, "MSG2 sig_rl - ");
-        PRINT_BYTE_ARRAY(file, &(p_msg2_body->sig_rl),
-                         p_msg2_body->sig_rl_size);
-    }
-    else if(response->type == TYPE_RA_ATT_RESULT)
-    {
-        sample_ra_att_result_msg_t *p_att_result =
-            (sample_ra_att_result_msg_t *)(response->body);
-        fprintf(file, "ATTESTATION RESULT MSG platform_info_blob - ");
-        PRINT_BYTE_ARRAY(file, &(p_att_result->platform_info_blob),
-                         sizeof(p_att_result->platform_info_blob));
-
-        fprintf(file, "ATTESTATION RESULT MSG mac - ");
-        PRINT_BYTE_ARRAY(file, &(p_att_result->mac), sizeof(p_att_result->mac));
-
-        fprintf(file, "ATTESTATION RESULT MSG secret.payload_tag - %u bytes\n",
-                p_att_result->secret.payload_size);
-
-        fprintf(file, "ATTESTATION RESULT MSG secret.payload - ");
-        PRINT_BYTE_ARRAY(file, p_att_result->secret.payload,
-                p_att_result->secret.payload_size);
-    }
-    else
-    {
-        fprintf(file, "\nERROR in printing out the response. "
-                       "Response of type not supported %d\n", response->type);
-    }
-}
-
-void ocall_print(const char *str)
+extern "C" void ocall_print(const char *str)
 {
     printf("OCALL: %s\n", str);
 }
 
-int sgx_ecdh() 
+int ra_send0_receive(uint32_t extended_epid_group_id, uint8_t *p_resp, 
+                        uint32_t resp_size,  uint32_t *resp_body_size)
+{
+    VirtIOArg arg;
+    func();
+    memset(&arg, 0, sizeof(VirtIOArg));
+    arg.cmd         = VIRTIO_SGX_MSG0;
+    arg.flag        = 0;
+    arg.srcSize     = (uint32_t)extended_epid_group_id;
+    arg.dst         = (uint64_t)p_resp;
+    arg.dstSize     = (uint32_t)resp_size;
+    arg.tid         = (uint32_t)syscall(SYS_gettid);
+    send_to_device(VIRTIO_IOC_SGX_MSG0, &arg);
+    *resp_body_size = arg.paramSize;
+    return arg.cmd;
+}
+
+int ra_send1_receive(sgx_ra_msg1_t *p_req, uint8_t *p_resp, 
+                        uint32_t resp_size, uint32_t *resp_body_size)
+{
+    VirtIOArg arg;
+    func();
+    memset(&arg, 0, sizeof(VirtIOArg));
+    arg.cmd         = VIRTIO_SGX_MSG1;
+    arg.flag        = 1;
+    arg.src         = (uint64_t)p_req;
+    arg.srcSize     = (uint32_t)sizeof(sgx_ra_msg1_t);
+    arg.dst         = (uint64_t)p_resp;
+    arg.dstSize     = (uint32_t)resp_size;
+    arg.tid         = (uint32_t)syscall(SYS_gettid);
+    send_to_device(VIRTIO_IOC_SGX_MSG1, &arg);
+    *resp_body_size = arg.paramSize;
+    return arg.cmd;
+}
+
+int ra_send3_receive(sgx_ra_msg3_t *p_req, uint32_t req_size, 
+                        uint8_t *p_resp, uint32_t resp_size, 
+                        uint32_t *resp_body_size)
+{
+    VirtIOArg arg;
+    func();
+    memset(&arg, 0, sizeof(VirtIOArg));
+    arg.cmd         = VIRTIO_SGX_MSG3;
+    arg.flag        = 3;
+    arg.src         = (uint64_t)p_req;
+    arg.srcSize     = (uint32_t)req_size;
+    arg.dst         = (uint64_t)p_resp;
+    arg.dstSize     = (uint32_t)resp_size;
+    arg.tid         = (uint32_t)syscall(SYS_gettid);
+    send_to_device(VIRTIO_IOC_SGX_MSG3, &arg);
+    *resp_body_size = arg.paramSize;
+    return arg.cmd;
+}
+
+int init_sgx_ecdh(SGX_RA_ENV *sgx_ctx)
 {
     int ret = 0;
-    ra_samp_request_header_t *p_msg0_full = NULL;
-    ra_samp_response_header_t *p_msg0_resp_full = NULL;
-    ra_samp_request_header_t *p_msg1_full = NULL;
-    ra_samp_response_header_t *p_msg2_full = NULL;
+    uint32_t resp_size = 0x200;
+    uint8_t *p_msg_resp_body = NULL;
+    uint32_t resp_body_size;
+    sgx_ra_msg1_t *p_msg1;
     sgx_ra_msg3_t *p_msg3 = NULL;
-    ra_samp_response_header_t* p_att_result_msg_full = NULL;
     sgx_enclave_id_t enclave_id = 0;
     int enclave_lost_retry_time = 1;
     int busy_retry_time = 4;
     sgx_ra_context_t context = INT_MAX;
     sgx_status_t status = SGX_SUCCESS;
-    ra_samp_request_header_t* p_msg3_full = NULL;
     sgx_att_key_id_t selected_key_id = {0};
     uint32_t k;
     sgx_ec_key_128bit_t buf;
-    int32_t verify_index = -1;
-    int32_t verification_samples = sizeof(msg1_samples)/sizeof(msg1_samples[0]);
 
-    FILE* OUTPUT = stdout;
-    #define VERIFICATION_INDEX_IS_VALID() (verify_index > 0 && \
-                                       verify_index <= verification_samples)
-    #define GET_VERIFICATION_ARRAY_INDEX() (verify_index-1)
-    int i = 2; // We will do it twice, the first time is ECDSA quoting, the second one is EPID quoting
-    do
-    {
-        if (i == 2)
-        {
-            fprintf(OUTPUT, "\nFirst round, we will try ECDSA algorithm.\n");
-        }
-        else
-        {
-            fprintf(OUTPUT, "\nSecond round, we will try EPID algorithm.\n");
-        }
+    FILE* OUTPUT = stdout;   
+
+        debug("\nWe will try EPID algorithm.\n");
         // Preparation for remote attestation by configuring extended epid group id.
         {
             uint32_t extended_epid_group_id = 0;
@@ -2450,55 +2412,33 @@ int sgx_ecdh()
             if (SGX_SUCCESS != ret)
             {
                 ret = -1;
-                fprintf(OUTPUT, "\nError, call sgx_get_extended_epid_group_id fail [%s].",
-                    __FUNCTION__);
+                error("Error, call sgx_get_extended_epid_group_id fail.\n");
                 return ret;
             }
-            fprintf(OUTPUT, "\nCall sgx_get_extended_epid_group_id success.");
-
-            p_msg0_full = (ra_samp_request_header_t*)
-                malloc(sizeof(ra_samp_request_header_t)
-                +sizeof(uint32_t));
-            if (NULL == p_msg0_full)
-            {
-                ret = -1;
-                goto CLEANUP;
-            }
-            p_msg0_full->type = TYPE_RA_MSG0;
-            p_msg0_full->size = sizeof(uint32_t);
-
-            *(uint32_t*)((uint8_t*)p_msg0_full + sizeof(ra_samp_request_header_t)) = extended_epid_group_id;
-            {
-
-                fprintf(OUTPUT, "\nMSG0 body generated -\n");
-
-                PRINT_BYTE_ARRAY(OUTPUT, p_msg0_full->body, p_msg0_full->size);
-
-            }
+            debug("Call sgx_get_extended_epid_group_id success.\n");
             // The ISV application sends msg0 to the SP.
             // The ISV decides whether to support this extended epid group id.
-            fprintf(OUTPUT, "\nSending msg0 to remote attestation service provider.\n");
-
-            ret = ra_network_send_receive("http://SampleServiceProvider.intel.com/",
-                p_msg0_full,
-                &p_msg0_resp_full);
+            debug("\nSending msg0 to remote attestation service provider.\n");
+            p_msg_resp_body = (uint8_t *)malloc(resp_size);
+            ret = ra_send0_receive(extended_epid_group_id, p_msg_resp_body, 
+                                    resp_size, &resp_body_size);
             if (ret != 0)
             {
-                fprintf(OUTPUT, "\nError, ra_network_send_receive for msg0 failed "
-                    "[%s].", __FUNCTION__);
+                error("\nError, ra_network_send_receive for msg0 failed\n");
                 goto CLEANUP;
             }
-            fprintf(OUTPUT, "\nSent MSG0 to remote attestation service.\n");
-
-            ret = sgx_select_att_key_id(p_msg0_resp_full->body, p_msg0_resp_full->size, &selected_key_id);
+            debug("\nSent MSG0 to remote attestation service.\n");
+            debug("\nQEMU MSG0 resp size 0x%x.\n", resp_body_size);
+            ret = sgx_select_att_key_id(p_msg_resp_body, resp_body_size, &selected_key_id);
             if(SGX_SUCCESS != ret)
             {
                 ret = -1;
-                fprintf(OUTPUT, "\nInfo, call sgx_select_att_key_id fail, current platform configuration doesn't support this attestation key ID.",
-                        __FUNCTION__);
+                debug("\nInfo, call sgx_select_att_key_id fail, "
+                        "current platform configuration doesn't support "
+                        "this attestation key ID.");
                 goto CLEANUP;
             }
-            fprintf(OUTPUT, "\nCall sgx_select_att_key_id success.");
+            debug("\nCall sgx_select_att_key_id success.");
         }
         // Remote attestation will be initiated the ISV server challenges the ISV
         // app or if the ISV app detects it doesn't have the credentials
@@ -2516,11 +2456,10 @@ int sgx_ecdh()
                 if(SGX_SUCCESS != ret)
                 {
                     ret = -1;
-                    fprintf(OUTPUT, "\nError, call sgx_create_enclave fail [%s].",
-                            __FUNCTION__);
+                    error("\nError, call sgx_create_enclave fail.\n");
                     goto CLEANUP;
                 }
-                fprintf(OUTPUT, "\nCall sgx_create_enclave success.");
+                debug("\nCall sgx_create_enclave success.");
 
                 ret = enclave_init_ra(enclave_id,
                                       &status,
@@ -2532,248 +2471,110 @@ int sgx_ecdh()
             if(SGX_SUCCESS != ret || status)
             {
                 ret = -1;
-                fprintf(OUTPUT, "\nError, call enclave_init_ra fail [%s].",
-                        __FUNCTION__);
+                error("\nError, call enclave_init_ra fail.\n");
                 goto CLEANUP;
             }
-            fprintf(OUTPUT, "\nCall enclave_init_ra success.");
+            debug("\nCall enclave_init_ra success.");
 
             // isv application call uke sgx_ra_get_msg1
-            p_msg1_full = (ra_samp_request_header_t*)
-                          malloc(sizeof(ra_samp_request_header_t)
-                                 + sizeof(sgx_ra_msg1_t));
-            if(NULL == p_msg1_full)
+            p_msg1 = (sgx_ra_msg1_t *)malloc(sizeof(sgx_ra_msg1_t));
+            if(NULL == p_msg1)
             {
                 ret = -1;
                 goto CLEANUP;
             }
-            p_msg1_full->type = TYPE_RA_MSG1;
-            p_msg1_full->size = sizeof(sgx_ra_msg1_t);
             do
             {
-                ret = sgx_ra_get_msg1_ex(&selected_key_id, context, enclave_id, sgx_ra_get_ga,
-                                      (sgx_ra_msg1_t*)((uint8_t*)p_msg1_full
-                                      + sizeof(ra_samp_request_header_t)));
-                sleep(3); // Wait 3s between retries
+                ret = sgx_ra_get_msg1_ex(&selected_key_id, context, enclave_id, sgx_ra_get_ga, p_msg1);
+                if (SGX_ERROR_BUSY == ret)
+                    sleep(1); // Wait 1 s between retries
             } while (SGX_ERROR_BUSY == ret && busy_retry_time--);
             if(SGX_SUCCESS != ret)
             {
                 ret = -1;
-                fprintf(OUTPUT, "\nError, call sgx_ra_get_msg1_ex fail [%s].",
-                        __FUNCTION__);
+                error("\nError, call sgx_ra_get_msg1_ex fail.\n");
                 goto CLEANUP;
             }
             else
             {
-                fprintf(OUTPUT, "\nCall sgx_ra_get_msg1_ex success.\n");
+                debug("\nCall sgx_ra_get_msg1_ex success.\n");
 
-                fprintf(OUTPUT, "\nMSG1 body generated -\n");
+                debug("\nMSG1 body generated -\n");
 
-                PRINT_BYTE_ARRAY(OUTPUT, p_msg1_full->body, p_msg1_full->size);
+                PRINT_BYTE_ARRAY(OUTPUT, p_msg1, sizeof(sgx_ra_msg1_t));
 
-            }
-
-            if(VERIFICATION_INDEX_IS_VALID())
-            {
-
-                memcpy_s(p_msg1_full->body, p_msg1_full->size,
-                         msg1_samples[GET_VERIFICATION_ARRAY_INDEX()],
-                         p_msg1_full->size);
-
-                fprintf(OUTPUT, "\nInstead of using the recently generated MSG1, "
-                                "we will use the following precomputed MSG1 -\n");
-
-                PRINT_BYTE_ARRAY(OUTPUT, p_msg1_full->body, p_msg1_full->size);
             }
 
 
             // The ISV application sends msg1 to the SP to get msg2,
             // msg2 needs to be freed when no longer needed.
             // The ISV decides whether to use linkable or unlinkable signatures.
-            fprintf(OUTPUT, "\nSending msg1 to remote attestation service provider."
+            debug("\nSending msg1 to remote attestation service provider."
                             "Expecting msg2 back.\n");
 
+            memset(p_msg_resp_body, 0, resp_size);
+            ret = ra_send1_receive(p_msg1, p_msg_resp_body, 
+                                resp_size, &resp_body_size);
 
-            ret = ra_network_send_receive("http://SampleServiceProvider.intel.com/",
-                                          p_msg1_full,
-                                          &p_msg2_full);
-
-            if(ret != 0 || !p_msg2_full)
+            if(ret != 0 || !p_msg_resp_body)
             {
-                fprintf(OUTPUT, "\nError, ra_network_send_receive for msg1 failed "
-                                "[%s].", __FUNCTION__);
-                if(VERIFICATION_INDEX_IS_VALID())
-                {
-                    fprintf(OUTPUT, "\nBecause we are in verification mode we will "
-                                    "ignore this error.\n");
-                    fprintf(OUTPUT, "\nInstead, we will pretend we received the "
-                                    "following MSG2 - \n");
-
-                    SAFE_FREE(p_msg2_full);
-                    ra_samp_response_header_t* precomputed_msg2 =
-                        (ra_samp_response_header_t*)msg2_samples[
-                            GET_VERIFICATION_ARRAY_INDEX()];
-                    const size_t msg2_full_size = sizeof(ra_samp_response_header_t)
-                                                  +  precomputed_msg2->size;
-                    p_msg2_full =
-                        (ra_samp_response_header_t*)malloc(msg2_full_size);
-                    if(NULL == p_msg2_full)
-                    {
-                        ret = -1;
-                        goto CLEANUP;
-                    }
-                    memcpy_s(p_msg2_full, msg2_full_size, precomputed_msg2,
-                             msg2_full_size);
-
-                    PRINT_BYTE_ARRAY(OUTPUT, p_msg2_full,
-                                     (uint32_t)sizeof(ra_samp_response_header_t)
-                                     + p_msg2_full->size);
-                }
-                else
-                {
-                    goto CLEANUP;
-                }
+                error("\nError, ra_network_send_receive for msg1 failed\n");
+                goto CLEANUP;
             }
             else
             {
                 // Successfully sent msg1 and received a msg2 back.
                 // Time now to check msg2.
-                if(TYPE_RA_MSG2 != p_msg2_full->type)
-                {
-
-                    fprintf(OUTPUT, "\nError, didn't get MSG2 in response to MSG1. "
-                                    "[%s].", __FUNCTION__);
-
-                    if(VERIFICATION_INDEX_IS_VALID())
-                    {
-                        fprintf(OUTPUT, "\nBecause we are in verification mode we "
-                                        "will ignore this error.");
-                    }
-                    else
-                    {
-                        goto CLEANUP;
-                    }
-                }
-
-                fprintf(OUTPUT, "\nSent MSG1 to remote attestation service "
+                debug("\nSent MSG1 to remote attestation service "
                                 "provider. Received the following MSG2:\n");
-                PRINT_BYTE_ARRAY(OUTPUT, p_msg2_full,
-                                 (uint32_t)sizeof(ra_samp_response_header_t)
-                                 + p_msg2_full->size);
-
-                fprintf(OUTPUT, "\nA more descriptive representation of MSG2:\n");
-                PRINT_ATTESTATION_SERVICE_RESPONSE(OUTPUT, p_msg2_full);
-
-                if( VERIFICATION_INDEX_IS_VALID() )
-                {
-                    // The response should match the precomputed MSG2:
-                    ra_samp_response_header_t* precomputed_msg2 =
-                        (ra_samp_response_header_t *)
-                        msg2_samples[GET_VERIFICATION_ARRAY_INDEX()];
-                    if(MSG2_BODY_SIZE !=
-                        sizeof(ra_samp_response_header_t) + p_msg2_full->size ||
-                        memcmp( precomputed_msg2, p_msg2_full,
-                            sizeof(ra_samp_response_header_t) + p_msg2_full->size))
-                    {
-                        fprintf(OUTPUT, "\nVerification ERROR. Our precomputed "
-                                        "value for MSG2 does NOT match.\n");
-                        fprintf(OUTPUT, "\nPrecomputed value for MSG2:\n");
-                        PRINT_BYTE_ARRAY(OUTPUT, precomputed_msg2,
-                                         (uint32_t)sizeof(ra_samp_response_header_t)
-                                         + precomputed_msg2->size);
-                        fprintf(OUTPUT, "\nA more descriptive representation "
-                                        "of precomputed value for MSG2:\n");
-                        PRINT_ATTESTATION_SERVICE_RESPONSE(OUTPUT,
-                                                           precomputed_msg2);
-                    }
-                    else
-                    {
-                        fprintf(OUTPUT, "\nVerification COMPLETE. Remote "
-                                        "attestation service provider generated a "
-                                        "matching MSG2.\n");
-                    }
-                }
-
+                PRINT_BYTE_ARRAY(OUTPUT, p_msg_resp_body, resp_body_size);
             }
+            debug("\nMSG2 resp size %x.\n", resp_body_size);
 
-            sgx_ra_msg2_t* p_msg2_body = (sgx_ra_msg2_t*)((uint8_t*)p_msg2_full
-                                          + sizeof(ra_samp_response_header_t));
-
+            sgx_ra_msg2_t* p_msg2_body = (sgx_ra_msg2_t*)p_msg_resp_body;
 
             uint32_t msg3_size = 0;
-            if( VERIFICATION_INDEX_IS_VALID())
+            busy_retry_time = 2;
+            // The ISV app now calls uKE sgx_ra_proc_msg2,
+            // The ISV app is responsible for freeing the returned p_msg3!!
+            do
             {
-                // We cannot generate a valid MSG3 using the precomputed messages
-                // we have been using. We will use the precomputed msg3 instead.
-                msg3_size = MSG3_BODY_SIZE;
-                p_msg3 = (sgx_ra_msg3_t*)malloc(msg3_size);
-                if(NULL == p_msg3)
-                {
-                    ret = -1;
-                    goto CLEANUP;
-                }
-                memcpy_s(p_msg3, msg3_size,
-                         msg3_samples[GET_VERIFICATION_ARRAY_INDEX()], msg3_size);
-                fprintf(OUTPUT, "\nBecause MSG1 was a precomputed value, the MSG3 "
-                                "we use will also be. PRECOMPUTED MSG3 - \n");
+                ret = sgx_ra_proc_msg2_ex(&selected_key_id,
+                                   context,
+                                   enclave_id,
+                                   sgx_ra_proc_msg2_trusted,
+                                   sgx_ra_get_msg3_trusted,
+                                   p_msg2_body,
+                                   resp_body_size,
+                                   &p_msg3,
+                                   &msg3_size);
+                if (SGX_ERROR_BUSY == ret)
+                    sleep(1); // Wait 1 s between retries
+            } while (SGX_ERROR_BUSY == ret && busy_retry_time--);
+            if(!p_msg3)
+            {
+                error("\nError, call sgx_ra_proc_msg2_ex fail. "
+                                "p_msg3 = 0x%p.", p_msg3);
+                ret = -1;
+                goto CLEANUP;
+            }
+            if(SGX_SUCCESS != (sgx_status_t)ret)
+            {
+                error("\nError, call sgx_ra_proc_msg2_ex fail. "
+                                "ret = 0x%08x .\n", ret);
+                ret = -1;
+                goto CLEANUP;
             }
             else
             {
-                busy_retry_time = 2;
-                // The ISV app now calls uKE sgx_ra_proc_msg2,
-                // The ISV app is responsible for freeing the returned p_msg3!!
-                do
-                {
-                    ret = sgx_ra_proc_msg2_ex(&selected_key_id,
-                                       context,
-                                       enclave_id,
-                                       sgx_ra_proc_msg2_trusted,
-                                       sgx_ra_get_msg3_trusted,
-                                       p_msg2_body,
-                                       p_msg2_full->size,
-                                       &p_msg3,
-                                       &msg3_size);
-                } while (SGX_ERROR_BUSY == ret && busy_retry_time--);
-                if(!p_msg3)
-                {
-                    fprintf(OUTPUT, "\nError, call sgx_ra_proc_msg2_ex fail. "
-                                    "p_msg3 = 0x%p [%s].", p_msg3, __FUNCTION__);
-                    ret = -1;
-                    goto CLEANUP;
-                }
-                if(SGX_SUCCESS != (sgx_status_t)ret)
-                {
-                    fprintf(OUTPUT, "\nError, call sgx_ra_proc_msg2_ex fail. "
-                                    "ret = 0x%08x [%s].", ret, __FUNCTION__);
-                    ret = -1;
-                    goto CLEANUP;
-                }
-                else
-                {
-                    fprintf(OUTPUT, "\nCall sgx_ra_proc_msg2_ex success.\n");
-                    fprintf(OUTPUT, "\nMSG3 - \n");
-                }
+                debug("\nCall sgx_ra_proc_msg2_ex success.\n");
+                debug("\nMSG3 - \n");
             }
 
             PRINT_BYTE_ARRAY(OUTPUT, p_msg3, msg3_size);
-
-            p_msg3_full = (ra_samp_request_header_t*)malloc(
-                           sizeof(ra_samp_request_header_t) + msg3_size);
-            if(NULL == p_msg3_full)
-            {
-                ret = -1;
-                goto CLEANUP;
-            }
-            p_msg3_full->type = TYPE_RA_MSG3;
-            p_msg3_full->size = msg3_size;
-            if(memcpy_s(p_msg3_full->body, msg3_size, p_msg3, msg3_size))
-            {
-                fprintf(OUTPUT,"\nError: INTERNAL ERROR - memcpy failed in [%s].",
-                        __FUNCTION__);
-                ret = -1;
-                goto CLEANUP;
-            }
-
+            debug("\n msg3_size = 0x%x.\n", msg3_size);
+            debug("\n sizeof(sgx_ra_msg3_t) = 0x%lx.\n", sizeof(sgx_ra_msg3_t));
+            
             // The ISV application sends msg3 to the SP to get the attestation
             // result message, attestation result message needs to be freed when
             // no longer needed. The ISV service provider decides whether to use
@@ -2782,64 +2583,29 @@ int sgx_ecdh()
             // demonstration.  Note that the attestation result message makes use
             // of both the MK for the MAC and the SK for the secret. These keys are
             // established from the SIGMA secure channel binding.
-            ret = ra_network_send_receive("http://SampleServiceProvider.intel.com/",
-                                          p_msg3_full,
-                                          &p_att_result_msg_full);
-            if(ret || !p_att_result_msg_full)
+            
+            memset(p_msg_resp_body, 0, resp_size);
+            ret = ra_send3_receive(p_msg3, msg3_size, p_msg_resp_body, 
+                                resp_size, &resp_body_size);
+            if(ret || !p_msg_resp_body)
             {
                 ret = -1;
-                fprintf(OUTPUT, "\nError, sending msg3 failed [%s].", __FUNCTION__);
+                error("\nError, sending msg3 failed.\n");
                 goto CLEANUP;
             }
 
-
+            debug("\nMSG4 resp size %x.\n", resp_body_size);
+            // sample_ra_att_result_msg_t * p_att_result_msg_body =
+            //     (sample_ra_att_result_msg_t *)((uint8_t*)p_att_result_msg_full
+            //                                    + sizeof(ra_samp_response_header_t));
             sample_ra_att_result_msg_t * p_att_result_msg_body =
-                (sample_ra_att_result_msg_t *)((uint8_t*)p_att_result_msg_full
-                                               + sizeof(ra_samp_response_header_t));
-            if(TYPE_RA_ATT_RESULT != p_att_result_msg_full->type)
-            {
-                ret = -1;
-                fprintf(OUTPUT, "\nError. Sent MSG3 successfully, but the message "
-                                "received was NOT of type att_msg_result. Type = "
-                                "%d. [%s].", p_att_result_msg_full->type,
-                                 __FUNCTION__);
-                goto CLEANUP;
-            }
-            else
-            {
-                fprintf(OUTPUT, "\nSent MSG3 successfully. Received an attestation "
+                        (sample_ra_att_result_msg_t *)p_msg_resp_body;
+
+            debug("\nSent MSG3 successfully. Received an attestation "
                                 "result message back\n.");
-                if( VERIFICATION_INDEX_IS_VALID() )
-                {
-                    if(ATTESTATION_MSG_BODY_SIZE != p_att_result_msg_full->size ||
-                        memcmp(p_att_result_msg_full->body,
-                            attestation_msg_samples[GET_VERIFICATION_ARRAY_INDEX()],
-                            p_att_result_msg_full->size) )
-                    {
-                        fprintf(OUTPUT, "\nSent MSG3 successfully. Received an "
-                                        "attestation result message back that did "
-                                        "NOT match the expected value.\n");
-                        fprintf(OUTPUT, "\nEXPECTED ATTESTATION RESULT -");
-                        PRINT_BYTE_ARRAY(OUTPUT,
-                            attestation_msg_samples[GET_VERIFICATION_ARRAY_INDEX()],
-                            ATTESTATION_MSG_BODY_SIZE);
-                    }
-                }
-            }
 
-            fprintf(OUTPUT, "\nATTESTATION RESULT RECEIVED - ");
-            PRINT_BYTE_ARRAY(OUTPUT, p_att_result_msg_full->body,
-                             p_att_result_msg_full->size);
-
-
-            if( VERIFICATION_INDEX_IS_VALID() )
-            {
-                fprintf(OUTPUT, "\nBecause we used precomputed values for the "
-                                "messages, the attestation result message will "
-                                "not pass further verification tests, so we will "
-                                "skip them.\n");
-                goto CLEANUP;
-            }
+            debug("\nATTESTATION RESULT RECEIVED - ");
+            PRINT_BYTE_ARRAY(OUTPUT, p_att_result_msg_body, resp_body_size);
 
             // Check the MAC using MK on the attestation result message.
             // The format of the attestation result message is ISV specific.
@@ -2856,23 +2622,9 @@ int sgx_ecdh()
                (SGX_SUCCESS != status))
             {
                 ret = -1;
-                fprintf(OUTPUT, "\nError: INTEGRITY FAILED - attestation result "
-                                "message MK based cmac failed in [%s].",
-                                __FUNCTION__);
+                error("\nError: INTEGRITY FAILED - attestation result "
+                                "message MK based cmac failed.\n");
                 goto CLEANUP;
-            }
-
-            bool attestation_passed = true;
-            // Check the attestation result for pass or fail.
-            // Whether attestation passes or fails is a decision made by the ISV Server.
-            // When the ISV server decides to trust the enclave, then it will return success.
-            // When the ISV server decided to not trust the enclave, then it will return failure.
-            if(0 != p_att_result_msg_full->status[0]
-               || 0 != p_att_result_msg_full->status[1])
-            {
-                fprintf(OUTPUT, "\nError, attestation result message MK based cmac "
-                                "failed in [%s].", __FUNCTION__);
-                attestation_passed = false;
             }
 
             // The attestation result message should contain a field for the Platform
@@ -2891,41 +2643,52 @@ int sgx_ecdh()
 
             // Get the shared secret sent by the server using SK (if attestation
             // passed)
-            if(attestation_passed)
-            {
-                ret = put_secret_data(enclave_id,
-                                      &status,
-                                      context,
-                                      p_att_result_msg_body->secret.payload,
-                                      p_att_result_msg_body->secret.payload_size,
-                                      p_att_result_msg_body->secret.payload_tag);
-                if((SGX_SUCCESS != ret)  || (SGX_SUCCESS != status))
-                {
-                    fprintf(OUTPUT, "\nError, attestation result message secret "
-                                    "using SK based AESGCM failed in [%s]. ret = "
-                                    "0x%0x. status = 0x%0x", __FUNCTION__, ret,
-                                     status);
-                    goto CLEANUP;
-                }
-            }
-            fprintf(OUTPUT, "\nSecret successfully received from server.");
-            fprintf(OUTPUT, "\nRemote attestation success!");
-            
             ret = enclave_key_out(enclave_id, &status, context, buf, sizeof(sgx_ec_key_128bit_t));
             if((SGX_SUCCESS != ret)  || (SGX_SUCCESS != status))
             {
-                fprintf(OUTPUT, "\nError, can not get secret "
+                error("\nError, can not get secret "
                                 "failed in [%s]. ret = "
                                 "0x%0x. status = 0x%0x", __FUNCTION__, ret,
                                  status);
                 goto CLEANUP;
             }
-            fprintf(OUTPUT, "\n Get sk key\n");
+            debug("\n Get sk key\n");
             for(k=0; k<sizeof(sgx_ec_key_128bit_t); k++) {
                 fprintf(OUTPUT, "\t%x", buf[k]);
             }
-            fprintf(OUTPUT, "\n");
+            debug_clean("\n");
+            debug("payload size %x\n", p_att_result_msg_body->secret.payload_size);
+            debug("payload\n");
+            for (k=0; k<p_att_result_msg_body->secret.payload_size; k++) {
+                debug_clean("%x ", p_att_result_msg_body->secret.payload[k]);
+            }
+            debug_clean("\n");
+            debug("payload tag\n");
+            for (k=0; k<SAMPLE_SP_TAG_SIZE; k++) {
+                debug_clean("%x ", p_att_result_msg_body->secret.payload_tag[k]);
+            }
+            debug_clean("\n\n");
+            ret = put_secret_data(enclave_id,
+                                  &status,
+                                  context,
+                                  p_att_result_msg_body->secret.payload,
+                                  p_att_result_msg_body->secret.payload_size,
+                                  p_att_result_msg_body->secret.payload_tag);
+            if((SGX_SUCCESS != ret)  || (SGX_SUCCESS != status))
+            {
+                error("\nError, attestation result message secret "
+                                "using SK based AESGCM failed in [%s]. ret = "
+                                "0x%0x. status = 0x%0x", __FUNCTION__, ret,
+                                 status);
+                goto CLEANUP;
+            }
+            debug("\nSecret successfully received from server.");
+            debug("\nRemote attestation success!");
+            
         }
+        sgx_ctx->context    = context;
+        sgx_ctx->enclave_id = enclave_id;
+        return 0;
 
     CLEANUP:
         // Clean-up
@@ -2937,8 +2700,7 @@ int sgx_ecdh()
             if(SGX_SUCCESS != ret || status)
             {
                 ret = -1;
-                fprintf(OUTPUT, "\nError, call enclave_ra_close fail [%s].",
-                        __FUNCTION__);
+                error("\nError, call enclave_ra_close fail.\n");
             }
             else
             {
@@ -2946,29 +2708,59 @@ int sgx_ecdh()
                 // led us to this point in the code.
                 ret = ret_save;
             }
-            fprintf(OUTPUT, "\nCall enclave_ra_close success.");
+            debug("\nCall enclave_ra_close success.");
         }
 
         sgx_destroy_enclave(enclave_id);
 
-
-        ra_free_network_response_buffer(p_msg0_resp_full);
-        p_msg0_resp_full = NULL;
-        ra_free_network_response_buffer(p_msg2_full);
-        p_msg2_full = NULL;
-        ra_free_network_response_buffer(p_att_result_msg_full);
-        p_att_result_msg_full = NULL;
-
         // p_msg3 is malloc'd by the untrusted KE library. App needs to free.
+        free(p_msg_resp_body);
         SAFE_FREE(p_msg3);
-        SAFE_FREE(p_msg3_full);
-        SAFE_FREE(p_msg1_full);
-        SAFE_FREE(p_msg0_full);
-    }while(--i);
+
     return 0;
 }
 
-/*cudaError_t cudaMemcpySafe(void *dst, const void *src, size_t count, enum cudaMemcpyKind kind)
+static int fini_sgx_ecdh(SGX_RA_ENV sgx_ctx)
 {
-    return 0;
-}*/
+    int ret = 0;
+    sgx_status_t status = SGX_SUCCESS;
+    // Need to close the RA key state.
+    if(INT_MAX != sgx_ctx.context)
+    {
+        int ret_save = ret;
+        ret = enclave_ra_close(sgx_ctx.enclave_id, &status, sgx_ctx.context);
+        if(SGX_SUCCESS != ret || status)
+        {
+            ret = -1;
+            error("Error, call enclave_ra_close fail.\n");
+        }
+        else
+        {
+            // enclave_ra_close was successful, let's restore the value that
+            // led us to this point in the code.
+            ret = ret_save;
+        }
+        debug("Call enclave_ra_close success.\n");
+    }
+
+    sgx_destroy_enclave(sgx_ctx.enclave_id);
+    return ret;
+}
+
+// static void *encrypt_data(uint8_t *msg)
+// {
+//     ret = put_secret_data(enclave_id,
+//                           &status,
+//                           context,
+//                           p_att_result_msg_body->secret.payload,
+//                           p_att_result_msg_body->secret.payload_size,
+//                           p_att_result_msg_body->secret.payload_tag);
+//     if((SGX_SUCCESS != ret)  || (SGX_SUCCESS != status))
+//     {
+//         fprintf(OUTPUT, "\nError, attestation result message secret "
+//                         "using SK based AESGCM failed in [%s]. ret = "
+//                         "0x%0x. status = 0x%0x", __FUNCTION__, ret,
+//                          status);
+//         goto CLEANUP;
+//     }
+// }

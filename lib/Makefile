@@ -87,7 +87,7 @@ else
 endif
 CUDAPATH=/usr/local/cuda
 App_Cpp_Files := isv_app/isv_app.cpp
-App_Include_Paths := -Iservice_provider -I$(SGX_SDK)/include -I$(CUDAPATH)/include
+App_Include_Paths := -I$(SGX_SDK)/include -I$(CUDAPATH)/include
 
 App_C_Flags := -fPIC -Wno-attributes $(App_Include_Paths)
 
@@ -104,7 +104,7 @@ else
 endif
 
 App_Cpp_Flags := $(App_C_Flags)
-App_Link_Flags := -shared -L$(SGX_LIBRARY_PATH) -l$(Urts_Library_Name) -L. -lsgx_ukey_exchange -lpthread -ldl -lservice_provider -Wl,-rpath=$(CURDIR)/sample_libcrypto -Wl,-rpath=$(CURDIR)
+App_Link_Flags := -shared -L$(SGX_LIBRARY_PATH) -l$(Urts_Library_Name) -L. -lsgx_ukey_exchange -lpthread -ldl -Wl,-rpath=$(CURDIR)
 App_Link_Flags += -Wl,-soname,libcudart.so.9.1 
 
 ifneq ($(SGX_MODE), HW)
@@ -116,17 +116,6 @@ endif
 App_Cpp_Objects := $(App_Cpp_Files:.cpp=.o)
 
 App_Name := libcudart.so.9.1.0
-
-######## Service Provider Settings ########
-
-ServiceProvider_Cpp_Files := service_provider/ecp.cpp service_provider/network_ra.cpp service_provider/service_provider.cpp service_provider/ias_ra.cpp 
-ServiceProvider_Include_Paths := -I$(SGX_SDK)/include -I$(SGX_SDK)/include/tlibc -I$(SGX_SDK)/include/libcxx -Isample_libcrypto
-
-ServiceProvider_C_Flags := -fPIC -Wno-attributes -I$(SGX_SDK)/include -Isample_libcrypto
-ServiceProvider_Cpp_Flags := $(ServiceProvider_C_Flags)
-ServiceProvider_Link_Flags :=  -shared -L$(SGX_LIBRARY_PATH) -lsample_libcrypto -Lsample_libcrypto
-
-ServiceProvider_Cpp_Objects := $(ServiceProvider_Cpp_Files:.cpp=.o)
 
 ######## Enclave Settings ########
 
@@ -200,7 +189,7 @@ all: .config_$(Build_Mode)_$(SGX_ARCH)
 	@$(MAKE) target
 
 ifeq ($(Build_Mode), HW_RELEASE)
-target: libservice_provider.so $(App_Name) $(Enclave_Name)
+target: $(App_Name) $(Enclave_Name)
 	@echo "The project has been built in release hardware mode."
 	@echo "Please sign the $(Enclave_Name) first with your signing key before you run the $(App_Name) to launch and access the enclave."
 	@echo "To sign the enclave use the command:"
@@ -208,7 +197,7 @@ target: libservice_provider.so $(App_Name) $(Enclave_Name)
 	@echo "You can also sign the enclave using an external signing tool."
 	@echo "To build the project in simulation mode set SGX_MODE=SIM. To build the project in prerelease mode set SGX_PRERELEASE=1 and SGX_MODE=HW."
 else
-target: libservice_provider.so $(App_Name) $(Signed_Enclave_Name)
+target: $(App_Name) $(Signed_Enclave_Name)
 ifeq ($(Build_Mode), HW_DEBUG)
 	@echo "The project has been built in debug hardware mode."
 else ifeq ($(Build_Mode), SIM_DEBUG)
@@ -229,7 +218,7 @@ ifneq ($(Build_Mode), HW_RELEASE)
 endif
 
 .config_$(Build_Mode)_$(SGX_ARCH):
-	@rm -f .config_* $(App_Name) $(App_Name) $(Enclave_Name) $(Signed_Enclave_Name) $(App_Cpp_Objects) isv_app/isv_enclave_u.* $(Enclave_Cpp_Objects) isv_enclave/isv_enclave_t.* libservice_provider.* $(ServiceProvider_Cpp_Objects)
+	@rm -f .config_* $(App_Name) $(App_Name) $(Enclave_Name) $(Signed_Enclave_Name) $(App_Cpp_Objects) isv_app/isv_enclave_u.* $(Enclave_Cpp_Objects) isv_enclave/isv_enclave_t.* 
 	@touch .config_$(Build_Mode)_$(SGX_ARCH)
 
 install: all 
@@ -254,17 +243,6 @@ isv_app/%.o: isv_app/%.cpp isv_app/isv_enclave_u.h
 
 $(App_Name): isv_app/isv_enclave_u.o $(App_Cpp_Objects)
 	@$(CC) $^ -o $@ $(App_Link_Flags)
-	@echo "LINK =>  $@"
-
-######## Service Provider Objects ########
-
-
-service_provider/%.o: service_provider/%.cpp
-	@$(CXX) $(SGX_COMMON_CXXFLAGS) $(ServiceProvider_Cpp_Flags) -c $< -o $@
-	@echo "CXX  <=  $<"
-
-libservice_provider.so: $(ServiceProvider_Cpp_Objects)
-	@$(CXX) $^ -o $@ $(ServiceProvider_Link_Flags)
 	@echo "LINK =>  $@"
 
 ######## Enclave Objects ########
@@ -294,4 +272,4 @@ $(Signed_Enclave_Name): $(Enclave_Name)
 .PHONY: clean
 
 clean:
-	@rm -f .config_* $(App_Name) $(App_Name) $(Enclave_Name) $(Signed_Enclave_Name) $(App_Cpp_Objects) isv_app/isv_enclave_u.* $(Enclave_Cpp_Objects) isv_enclave/isv_enclave_t.* libservice_provider.* $(ServiceProvider_Cpp_Objects)
+	@rm -f .config_* $(App_Name) $(App_Name) $(Enclave_Name) $(Signed_Enclave_Name) $(App_Cpp_Objects) isv_app/isv_enclave_u.* $(Enclave_Cpp_Objects) isv_enclave/isv_enclave_t.* 

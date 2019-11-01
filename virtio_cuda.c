@@ -3633,6 +3633,108 @@ int curand_set_pseudorandom_seed(VirtIOArg __user *arg, struct port *port)
 	return curand_send_basic(arg, port);
 }
 
+/**** SGX ************************************************************/
+static int sgx_proc_msg0(VirtIOArg __user *arg, struct port *port)
+{
+	VirtIOArg *payload;
+	void *ptr;
+	int ret;
+	func();
+
+	payload = (VirtIOArg *)memdup_user(arg, arg_len);
+	if(!payload) {
+		pr_err("[ERROR] can not malloc 0x%lx memory\n", arg_len);
+		return -ENOMEM;
+	}
+	ptr = kmalloc((size_t)payload->dstSize, GFP_KERNEL);
+	if(!ptr) {
+		pr_err("[ERROR] can not malloc 0x%x memory\n", payload->dstSize);
+		return -ENOMEM;
+	}
+	payload->param = (uint64_t)virt_to_phys(ptr);
+	ret = send_to_virtio(port, (void*)payload, arg_len);
+	gldebug("[+] now analyse return buf\n");
+	gldebug("[+] arg->cmd = %d\n", payload->cmd);
+	put_user(payload->cmd, &arg->cmd);
+	put_user(payload->paramSize, &arg->paramSize);
+	copy_to_user((void __user *)payload->dst, ptr, payload->paramSize);
+	kfree(ptr);
+	kfree(payload);
+	return ret;
+}
+
+static int sgx_proc_msg1(VirtIOArg __user *arg, struct port *port)
+{
+	VirtIOArg *payload;
+	void *ptr, *src;
+	int ret;
+	func();
+
+	payload = (VirtIOArg *)memdup_user(arg, arg_len);
+	if(!payload) {
+		pr_err("[ERROR] can not malloc 0x%lx memory\n", arg_len);
+		return -ENOMEM;
+	}
+	ptr = kmalloc((size_t)payload->dstSize, GFP_KERNEL);
+	if(!ptr) {
+		pr_err("[ERROR] can not malloc 0x%x memory\n", payload->dstSize);
+		return -ENOMEM;
+	}
+	payload->param = (uint64_t)virt_to_phys(ptr);
+	src = memdup_user((const void __user*)payload->src, payload->srcSize);
+	if(!src) {
+		pr_err("[ERROR] can not malloc 0x%x memory\n", payload->srcSize);
+		return -ENOMEM;
+	}
+	payload->src = (uint64_t)virt_to_phys(src);
+	ret = send_to_virtio(port, (void*)payload, arg_len);
+	gldebug("[+] now analyse return buf\n");
+	gldebug("[+] arg->cmd = %d\n", payload->cmd);
+	put_user(payload->cmd, &arg->cmd);
+	put_user(payload->paramSize, &arg->paramSize);
+	copy_to_user((void __user *)payload->dst, ptr, payload->paramSize);
+	kfree(ptr);
+	kfree(src);
+	kfree(payload);
+	return ret;
+}
+
+static int sgx_proc_msg3(VirtIOArg __user *arg, struct port *port)
+{
+	VirtIOArg *payload;
+	void *ptr, *src;
+	int ret;
+	func();
+
+	payload = (VirtIOArg *)memdup_user(arg, arg_len);
+	if(!payload) {
+		pr_err("[ERROR] can not malloc 0x%lx memory\n", arg_len);
+		return -ENOMEM;
+	}
+	ptr = kmalloc((size_t)payload->dstSize, GFP_KERNEL);
+	if(!ptr) {
+		pr_err("[ERROR] can not malloc 0x%x memory\n", payload->dstSize);
+		return -ENOMEM;
+	}
+	payload->param = (uint64_t)virt_to_phys(ptr);
+	src = memdup_user((const void __user*)payload->src, payload->srcSize);
+	if(!src) {
+		pr_err("[ERROR] can not malloc 0x%x memory\n", payload->srcSize);
+		return -ENOMEM;
+	}
+	payload->src = (uint64_t)virt_to_phys(src);
+	ret = send_to_virtio(port, (void*)payload, arg_len);
+	gldebug("[+] now analyse return buf\n");
+	gldebug("[+] arg->cmd = %d\n", payload->cmd);
+	put_user(payload->cmd, &arg->cmd);
+	put_user(payload->paramSize, &arg->paramSize);
+	copy_to_user((void __user *)payload->dst, ptr, payload->paramSize);
+	kfree(ptr);
+	kfree(src);
+	kfree(payload);
+	return ret;
+}
+
 int cuda_gpa_to_hva(VirtIOArg __user *arg, struct port *port)
 {
 	void *gva, *gpa;
@@ -3911,6 +4013,15 @@ static long port_fops_ioctl(struct file *filp, unsigned int cmd, unsigned long a
 			break;
 		case VIRTIO_IOC_CURAND_SETPSEUDORANDOMSEED:
 			curand_set_pseudorandom_seed((VirtIOArg __user*)arg, port);
+			break;
+		case VIRTIO_IOC_SGX_MSG0:
+			sgx_proc_msg0((VirtIOArg __user*)arg, port);
+			break;
+		case VIRTIO_IOC_SGX_MSG1:
+			sgx_proc_msg1((VirtIOArg __user*)arg, port);
+			break;
+		case VIRTIO_IOC_SGX_MSG3:
+			sgx_proc_msg3((VirtIOArg __user*)arg, port);
 			break;
 		default:
 			pr_err("[#] illegel VIRTIO ioctl nr = %u!\n", \

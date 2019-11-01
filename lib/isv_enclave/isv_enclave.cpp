@@ -414,3 +414,48 @@ sgx_status_t enclave_key_out(sgx_ra_context_t context, uint8_t *buf, uint32_t si
     memcpy(buf, &sk_key, sizeof(sk_key));
     return ret;
 }
+
+// Generate a secret information for the SP encrypted with SK.
+// Input pointers aren't checked since the trusted stubs copy
+// them into EPC memory.
+//
+// @param context The trusted KE library key context.
+// @param p_secret Message containing the secret.
+// @param secret_size Size in bytes of the secret message.
+// @param p_gcm_mac The pointer the the AESGCM MAC for the
+//                 message.
+//
+// @return SGX_ERROR_INVALID_PARAMETER - secret size if
+//         incorrect.
+// @return Any error produced by tKE  API to get SK key.
+// @return Any error produced by the AESGCM function.
+// @return SGX_ERROR_UNEXPECTED - the secret doesn't match the
+//         expected value.
+
+sgx_status_t encrypt_data(
+    sgx_ra_context_t context,
+    uint8_t *p_secret,
+    uint32_t secret_size,
+    uint8_t* p_encrypt_secret,
+    uint8_t *p_gcm_mac)
+{
+    sgx_status_t ret = SGX_SUCCESS;
+    sgx_ec_key_128bit_t sk_key;
+    uint8_t aes_gcm_iv[12] = {0};
+
+    ret = sgx_ra_get_keys(context, SGX_RA_KEY_SK, &sk_key);
+    if(SGX_SUCCESS != ret)
+        return ret;
+
+    ret = sgx_rijndael128GCM_encrypt(&sk_key,
+                                     p_secret,
+                                     secret_size,
+                                     p_encrypt_secret,
+                                     &aes_gcm_iv[0],
+                                     12,
+                                     NULL,
+                                     0,
+                                     (sgx_aes_gcm_128bit_tag_t *)
+                                        (p_gcm_mac));
+    return ret;
+}

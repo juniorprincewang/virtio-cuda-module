@@ -24,8 +24,9 @@ How to Build/Execute the Sample Code
         $ make SGX_MODE=SIM SGX_PRERELEASE=1 SGX_DEBUG=0
     f. Simulation Mode, Release build:
         $ make SGX_MODE=SIM SGX_DEBUG=0
-4. Execute the binary directly:
-    $ LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$PWD/sample_libcrypto ./app
+4. Move the *.so to the target directory
+    $ make install
+
 5. Remember to "make clean" before switching build mode
 
 -------------------------------------------------
