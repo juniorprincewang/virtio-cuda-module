@@ -1382,7 +1382,7 @@ int cuda_register_fatbinary(VirtIOArg __user *arg, struct port *port)
 		return -ENOMEM;
 	}
 	from_size = payload->srcSize;
-	gva = memdup_user((const void __user *)payload->src, (size_t)from_size);
+	gva = memdup_user((const void __user *)payload->src2, (size_t)from_size);
 	if(!gva) {
 		pr_err("[ERROR] can not malloc 0x%x memory\n", from_size);	
 		return -ENOMEM;

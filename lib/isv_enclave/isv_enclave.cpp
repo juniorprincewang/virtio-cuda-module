@@ -459,3 +459,30 @@ sgx_status_t encrypt_data(
                                         (p_gcm_mac));
     return ret;
 }
+
+sgx_status_t mac_data(
+    sgx_ra_context_t context,
+    uint8_t *p_secret,
+    uint32_t secret_size,
+    uint8_t *p_gcm_mac)
+{
+    sgx_status_t ret = SGX_SUCCESS;
+    sgx_ec_key_128bit_t sk_key;
+    uint8_t aes_gcm_iv[12] = {0};
+
+    ret = sgx_ra_get_keys(context, SGX_RA_KEY_SK, &sk_key);
+    if(SGX_SUCCESS != ret)
+        return ret;
+
+    ret = sgx_rijndael128GCM_encrypt(&sk_key,
+                                     NULL,
+                                     0,
+                                     NULL,
+                                     &aes_gcm_iv[0],
+                                     12,
+                                     p_secret,
+                                     secret_size,
+                                     (sgx_aes_gcm_128bit_tag_t *)
+                                        (p_gcm_mac));
+    return ret;
+}

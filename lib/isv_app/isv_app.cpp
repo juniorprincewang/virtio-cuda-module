@@ -343,14 +343,35 @@ void my_fini(void) {
     close_vdevice();
 }
 
+static void get_mac(uint8_t *data, uint32_t size, uint8_t *payload_tag)
+{
+    sgx_status_t status;
+    int ret;
+    ret = mac_data(sgx_env.enclave_id, &status, sgx_env.context, 
+                            data, size, payload_tag);
+    if((SGX_SUCCESS != ret)  || (SGX_SUCCESS != status))
+    {
+        error("\nError, attestation result message secret "
+                        "using SK based AESGCM failed. ret = "
+                        "0x%0x. status = 0x%0x", ret, status);
+        return;
+    }
+    debug("payload tag\n");
+    for (int k=0; k<SAMPLE_SP_TAG_SIZE; k++) {
+        debug_clean("%x ", payload_tag[k]);
+    }
+    debug_clean("\n\n");
+}
+
 extern "C" void** __cudaRegisterFatBinary(void *fatCubin)
 {
     VirtIOArg arg;
     unsigned int magic;
     unsigned long long **fatCubinHandle;
-
+    uint32_t size;
+    uint8_t payload_tag[SAMPLE_SP_TAG_SIZE];
+ 
     func();
-    
     fatCubinHandle = (unsigned long long**)__libc_malloc(sizeof(unsigned long long*));
     magic = *(unsigned int*)fatCubin;
     if (magic == FATBINC_MAGIC)
@@ -370,8 +391,12 @@ extern "C" void** __cudaRegisterFatBinary(void *fatCubin)
         debug("fatSize  =   %lld(0x%llx)\n", fatHeader->fatSize, fatHeader->fatSize);
         // initialize arguments
         memset(&arg, 0, ARG_LEN);
+        size = (uint32_t)(fatHeader->headerSize + fatHeader->fatSize);
+        get_mac((uint8_t *)(binary->data), size, payload_tag);
+        memcpy(arg.mac, payload_tag, SAMPLE_SP_TAG_SIZE);
         arg.src     = (uint64_t)(binary->data);
-        arg.srcSize = (uint32_t)(fatHeader->headerSize + fatHeader->fatSize);
+        arg.src2    = (uint64_t)(binary->data);
+        arg.srcSize = size;
         arg.dstSize = 0;
         arg.cmd     = VIRTIO_CUDA_REGISTERFATBINARY;
         arg.tid     = (uint32_t)syscall(SYS_gettid);
@@ -539,11 +564,11 @@ extern "C" void __cudaRegisterVar(
     debug("Undefined\n");
 }*/
 
-/*extern "C" char __cudaInitModule(void **fatCubinHandle)
+extern "C" char __cudaInitModule(void **fatCubinHandle)
 {
     func();
     return 'U';
-}*/
+}
 
 /*extern "C" cudaError_t  __cudaPopCallConfiguration(
   dim3         *gridDim,

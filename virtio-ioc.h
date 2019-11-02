@@ -5,6 +5,7 @@
 // #define KMALLOC_SHIFT 22 // 4MB
 #define KMALLOC_SHIFT 13
 #define KMALLOC_SIZE (1UL<<KMALLOC_SHIFT)
+#define VIRTIO_MAC
 // #define VIRTIO_LOCK
 // #define VIRTIO_LOCK_USER
 
@@ -151,6 +152,7 @@ typedef struct VirtIOArg
 	uint64_t param;
 	uint32_t paramSize;
 	uint64_t param2;
+	uint8_t  mac[16];
 } VirtIOArg;
 
 /* see ioctl-number in https://github.com/torvalds/
