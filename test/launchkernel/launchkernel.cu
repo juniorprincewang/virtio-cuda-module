@@ -78,7 +78,7 @@ int main()
 	float *d_a=0;
 	float *h_a=0;
 	dim3 block, grid;
-	int num = 1 << 24;
+	int num = 1 << 8;
     int nbytes = num * sizeof(float);
     int value=41;
     struct timeval malloc_start, malloc_end;
@@ -156,7 +156,8 @@ int main()
 		gettimeofday(&HtoD_start, NULL);
 	#endif
 	// CHECK(cudaMemcpy(d_a, h_a, nbytes, cudaMemcpyHostToDevice));
-	CHECK(cudaMemcpy(d_a, h_a, nbytes, cudaMemcpyDefault));
+	// CHECK(cudaMemcpy(d_a, h_a, nbytes, cudaMemcpyDefault));
+	CHECK(cudaMemcpySafe(d_a, h_a, nbytes, cudaMemcpyHostToDevice));
 	#ifdef  TIMING
 		gettimeofday(&HtoD_end, NULL);
 	#endif
@@ -172,7 +173,8 @@ int main()
 		gettimeofday(&DtoH_start, NULL);
 	#endif
 	// CHECK(cudaMemcpy(h_a, d_a, nbytes, cudaMemcpyDeviceToHost));
-	CHECK(cudaMemcpy(h_a, d_a, nbytes, cudaMemcpyDefault));
+	// CHECK(cudaMemcpy(h_a, d_a, nbytes, cudaMemcpyDefault));
+	CHECK(cudaMemcpySafe(h_a, d_a, nbytes, cudaMemcpyDeviceToHost));
 	#ifdef  TIMING
 		gettimeofday(&DtoH_end, NULL);
 	#endif

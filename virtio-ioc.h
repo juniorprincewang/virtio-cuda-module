@@ -70,10 +70,12 @@
 
 #define VIRTIO_CUDA_PEEKATLASTERROR 			41
 #define VIRTIO_CUDA_EVENTQUERY 					42
+#define VIRTIO_CUDA_PRIMARYCONTEXT 			43
 //SGX----------------------------------
 #define VIRTIO_SGX_MSG0							80
 #define VIRTIO_SGX_MSG1							81
 #define VIRTIO_SGX_MSG3							82
+#define VIRTIO_SGX_MEMCPY 						83
 
 //cublas----------------------------------
 #define VIRTIO_CUBLAS_CREATE 					100
@@ -256,7 +258,8 @@ typedef struct VirtIOArg
 	_IOWR(VIRTIO_IOC_ID,41,VirtIOArg)
 #define VIRTIO_IOC_EVENTQUERY \
 	_IOWR(VIRTIO_IOC_ID,42,VirtIOArg)
-
+#define VIRTIO_IOC_PRIMARYCONTEXT \
+	_IOWR(VIRTIO_IOC_ID,43,VirtIOArg)
 // SGX-------------------------------
 #define VIRTIO_IOC_SGX_MSG0 \
 	_IOWR(VIRTIO_IOC_ID,80,VirtIOArg)
@@ -264,6 +267,8 @@ typedef struct VirtIOArg
 	_IOWR(VIRTIO_IOC_ID,81,VirtIOArg)
 #define VIRTIO_IOC_SGX_MSG3 \
 	_IOWR(VIRTIO_IOC_ID,82,VirtIOArg)
+#define VIRTIO_IOC_SGX_MEMCPY \
+	_IOWR(VIRTIO_IOC_ID,83,VirtIOArg)
 // cublas-------------------------------
 #define VIRTIO_IOC_CUBLAS_CREATE \
 	_IOWR(VIRTIO_IOC_ID,100,VirtIOArg)

@@ -102,9 +102,44 @@ typedef struct sgx_ra_env
     sgx_enclave_id_t enclave_id;
 } SGX_RA_ENV;
 
+bool primary_context_initialized;
+typedef struct fatbin_buf
+{
+    uint32_t total_size;
+    uint32_t size;
+    uint32_t nr_binary;
+    uint8_t  buf[];
+} fatbin_buf_t;
 
-__attribute__ ((constructor)) void my_init(void);
-__attribute__ ((destructor)) void my_fini(void);
+static fatbin_buf_t *p_binary;
+
+typedef struct binary_buf
+{
+    uint32_t size;
+    uint32_t nr_var;
+    uint32_t nr_func;
+    uint8_t  buf[];
+} binary_buf_t;
+static binary_buf_t *p_last_binary;
+
+typedef struct function_buf
+{
+    uint64_t hostFun;
+    uint32_t size;
+    uint8_t  buf[];
+} function_buf_t;
+
+typedef struct var_buf
+{
+    uint64_t hostVar;
+    int constant;
+    int global;
+    uint32_t size;
+    uint8_t  buf[];
+} var_buf_t;
+
+__attribute__ ((constructor)) void my_library_init(void);
+__attribute__ ((destructor)) void my_library_fini(void);
 static int init_sgx_ecdh(SGX_RA_ENV *sgx_ctx);
 static int fini_sgx_ecdh(SGX_RA_ENV sgx_ctx);
 
@@ -327,7 +362,8 @@ static void close_vdevice()
 }
 
 
-void my_init(void) {
+void my_library_init(void) {
+    size_t page_size = sysconf(_SC_PAGESIZE);
     debug("Init dynamic library.\n");
     global_init = 1;
     map_offset=0;
@@ -335,10 +371,21 @@ void my_init(void) {
         exit(-1);
     pthread_spin_init(&lock, 0);
     init_sgx_ecdh(&sgx_env);
+    p_binary = (fatbin_buf_t *)__libc_malloc(page_size<<2);
+    if (!p_binary) {
+        error("Failed to allocate primary context buffer.\n");
+        exit(-1);
+    }
+    debug("p_binary address %p\n", p_binary);
+    primary_context_initialized = false;
+    p_binary->size = 0;
+    p_binary->nr_binary = 0;
+    p_binary->total_size = page_size<<2;
 }
 
-void my_fini(void) {
+void my_library_fini(void) {
     debug("deinit dynamic library\n");
+    free(p_binary);
     fini_sgx_ecdh(sgx_env);
     close_vdevice();
 }
@@ -351,8 +398,7 @@ static void get_mac(uint8_t *data, uint32_t size, uint8_t *payload_tag)
                             data, size, payload_tag);
     if((SGX_SUCCESS != ret)  || (SGX_SUCCESS != status))
     {
-        error("\nError, attestation result message secret "
-                        "using SK based AESGCM failed. ret = "
+        error("\nError, get mac using SK based AESGCM failed. ret = "
                         "0x%0x. status = 0x%0x", ret, status);
         return;
     }
@@ -361,6 +407,64 @@ static void get_mac(uint8_t *data, uint32_t size, uint8_t *payload_tag)
         debug_clean("%x ", payload_tag[k]);
     }
     debug_clean("\n\n");
+}
+
+static void get_decrypted_data(uint8_t *src, uint32_t size, uint8_t *dst, uint8_t *payload_tag)
+{
+    sgx_status_t status;
+    int ret;
+    ret = decrypt_data(sgx_env.enclave_id, &status, sgx_env.context, 
+                            src, size, dst, payload_tag);
+    if((SGX_SUCCESS != ret)  || (SGX_SUCCESS != status))
+    {
+        error("\nError, decrypt data using SK based AESGCM failed. ret = "
+                        "0x%0x. status = 0x%0x", ret, status);
+        return;
+    }
+    debug("payload tag\n");
+    for (int k=0; k<SAMPLE_SP_TAG_SIZE; k++) {
+        debug_clean("%x ", payload_tag[k]);
+    }
+    debug_clean("\n\n");
+}
+
+static void get_encrypted_data(uint8_t *src, uint32_t size, uint8_t *dst, uint8_t *payload_tag)
+{
+    sgx_status_t status;
+    int ret;
+    ret = encrypt_data(sgx_env.enclave_id, &status, sgx_env.context, 
+                            src, size, dst, payload_tag);
+    if((SGX_SUCCESS != ret)  || (SGX_SUCCESS != status))
+    {
+        error("Error, encrypt data using SK based AESGCM failed. ret = "
+                        "0x%0x. status = 0x%0x\n", ret, status);
+        return;
+    }
+    debug("payload tag\n");
+    for (int k=0; k<SAMPLE_SP_TAG_SIZE; k++) {
+        debug_clean("%x ", payload_tag[k]);
+    }
+    debug_clean("\n\n");
+}
+
+static void init_primary_context()
+{
+    VirtIOArg arg;
+    if(!primary_context_initialized) {
+        primary_context_initialized = true;
+        memset(&arg, 0, ARG_LEN);
+        debug("nr_binary %x\n", p_binary->nr_binary);
+        arg.src     = (uint64_t)p_binary;
+        arg.srcSize = p_binary->total_size;
+        arg.cmd     = VIRTIO_CUDA_PRIMARYCONTEXT;
+        arg.tid     = (uint32_t)syscall(SYS_gettid);
+        send_to_device(VIRTIO_IOC_PRIMARYCONTEXT, &arg);
+        if(arg.cmd != cudaSuccess)
+        {
+            error("Failed to initialize primary context\n");
+            exit(-1);
+        }
+    }
 }
 
 extern "C" void** __cudaRegisterFatBinary(void *fatCubin)
@@ -400,12 +504,24 @@ extern "C" void** __cudaRegisterFatBinary(void *fatCubin)
         arg.dstSize = 0;
         arg.cmd     = VIRTIO_CUDA_REGISTERFATBINARY;
         arg.tid     = (uint32_t)syscall(SYS_gettid);
-        send_to_device(VIRTIO_IOC_REGISTERFATBINARY, &arg);
-        if(arg.cmd != cudaSuccess)
-        {
-            error(" fatbin not registered\n");
-            exit(-1);
+        // 
+        if(p_binary->total_size < p_binary->size + size + sizeof(binary_buf_t)) {
+            p_binary = (fatbin_buf_t *)realloc(p_binary, p_binary->total_size*2);
+            p_binary->total_size = p_binary->total_size*2;
         }
+        p_last_binary = (binary_buf_t *)(p_binary->buf + p_binary->size);
+        p_last_binary->size     = size;
+        p_last_binary->nr_var   = 0;
+        p_last_binary->nr_func  = 0;
+        memcpy(p_last_binary->buf, binary->data, size);
+        p_binary->size += size + sizeof(binary_buf_t);
+        p_binary->nr_binary++;
+        // send_to_device(VIRTIO_IOC_REGISTERFATBINARY, &arg);
+        // if(arg.cmd != cudaSuccess)
+        // {
+        //     error(" fatbin not registered\n");
+        //     exit(-1);
+        // }
         return (void **)fatCubinHandle;
     }
     else
@@ -452,6 +568,7 @@ extern "C" void __cudaRegisterFunction(
 {
     VirtIOArg arg;
     computeFatBinaryFormat_t fatBinHeader;
+    uint32_t buf_size = 0;
     func();
 
     fatBinHeader = (computeFatBinaryFormat_t)(*fatCubinHandle);
@@ -464,6 +581,7 @@ extern "C" void __cudaRegisterFunction(
     debug(" deviceFun =%s, %p\n", deviceFun, deviceFun);
     debug(" deviceName = %s\n", deviceName);
     debug(" thread_limit = %d\n", thread_limit);
+    buf_size = (uint32_t)(strlen(deviceName)+1);
     memset(&arg, 0, ARG_LEN);
     arg.cmd     = VIRTIO_CUDA_REGISTERFUNCTION;
     arg.src     = (uint64_t)fatBinHeader;
@@ -472,12 +590,24 @@ extern "C" void __cudaRegisterFunction(
     arg.dstSize = (uint32_t)(strlen(deviceName)+1); // +1 in order to keep \x00
     arg.tid     = (uint32_t)syscall(SYS_gettid);
     arg.flag    = (uint64_t)hostFun;
-    send_to_device(VIRTIO_IOC_REGISTERFUNCTION, &arg);
-    if(arg.cmd != cudaSuccess)
-    {
-        error(" functions are not registered successfully.\n");
-        exit(-1);
+    // batch 
+    if(p_binary->total_size < p_binary->size + buf_size + sizeof(function_buf_t)) {
+        debug("realloc\n");
+        p_binary = (fatbin_buf_t *)realloc(p_binary, p_binary->total_size*2);
+        p_binary->total_size = p_binary->total_size*2;
     }
+    function_buf_t *p_func = (function_buf_t *)(p_binary->buf + p_binary->size);
+    p_func->size    = buf_size;
+    p_func->hostFun = (uint64_t)hostFun;
+    memcpy(p_func->buf, deviceName, buf_size);
+    p_binary->size += buf_size + sizeof(function_buf_t);
+    p_last_binary->nr_func += 1;
+    // send_to_device(VIRTIO_IOC_REGISTERFUNCTION, &arg);
+    // if(arg.cmd != cudaSuccess)
+    // {
+    //     error(" functions are not registered successfully.\n");
+    //     exit(-1);
+    // }
     return;
 }
 
@@ -494,6 +624,7 @@ extern "C" void __cudaRegisterVar(
 {
     VirtIOArg arg;
     computeFatBinaryFormat_t fatBinHeader;
+    uint32_t buf_size = 0;
     func();
 
     fatBinHeader = (computeFatBinaryFormat_t)(*fatCubinHandle);
@@ -505,6 +636,7 @@ extern "C" void __cudaRegisterVar(
     debug(" size = %d\n", size);
     debug(" constant = %d\n", constant);
     debug(" global = %d\n", global);
+    buf_size = (uint32_t)(strlen(deviceName)+1);
     memset(&arg, 0, ARG_LEN);
     arg.cmd     = VIRTIO_CUDA_REGISTERVAR;
     arg.src     = (uint64_t)fatBinHeader;
@@ -515,11 +647,25 @@ extern "C" void __cudaRegisterVar(
     arg.flag    = (uint64_t)hostVar;
     arg.param   = (uint64_t)constant;
     arg.param2  = (uint64_t)global;
-    send_to_device(VIRTIO_IOC_REGISTERVAR, &arg);
-    if(arg.cmd != cudaSuccess)
-    {
-        error(" functions are not registered successfully.\n");
+    // batch 
+    if(p_binary->total_size < p_binary->size + buf_size + sizeof(var_buf_t)) {
+        debug("realloc\n");
+        p_binary = (fatbin_buf_t *)realloc(p_binary, p_binary->total_size*2);
+        p_binary->total_size = p_binary->total_size * 2;
     }
+    var_buf_t *p_var = (var_buf_t *)(p_binary->buf + p_binary->size);
+    p_var->size     = buf_size;
+    p_var->hostVar  = (uint64_t)hostVar;
+    p_var->constant = constant;
+    p_var->global   = global;
+    memcpy(p_var->buf, deviceName, buf_size);
+    p_binary->size += buf_size + sizeof(var_buf_t);
+    p_last_binary->nr_var += 1;
+    // send_to_device(VIRTIO_IOC_REGISTERVAR, &arg);
+    // if(arg.cmd != cudaSuccess)
+    // {
+    //     error(" functions are not registered successfully.\n");
+    // }
 }
 
 /*extern "C" void __cudaRegisterManagedVar(
@@ -668,6 +814,7 @@ extern "C" cudaError_t cudaLaunch(const void *entry)
     VirtIOArg arg;
     unsigned char *para;
     func();
+    init_primary_context();
     if(!entry)
         return cudaSuccess;
     if (kernelConf.gridDim.x<=0 || kernelConf.gridDim.y<=0 || 
@@ -705,6 +852,7 @@ extern "C" cudaError_t cudaMemcpy(void *dst, const void *src, size_t count, enum
 {
     VirtIOArg arg;
     func();
+    init_primary_context();
     if (kind <0 || kind >4) {
         return cudaErrorInvalidMemcpyDirection;
     }
@@ -732,6 +880,7 @@ extern "C" cudaError_t cudaMemcpyToSymbol( const void *symbol, const void *src,
 {
     VirtIOArg arg;
     func();
+    init_primary_context();
     if(!symbol || !src || count<=0)
         return cudaSuccess;
     assert(kind == cudaMemcpyHostToDevice);
@@ -754,6 +903,7 @@ extern "C" cudaError_t cudaMemcpyFromSymbol(   void *dst, const void *symbol,
 {
     VirtIOArg arg;
     func();
+    init_primary_context();
     if(!dst || !symbol || count<=0)
         return cudaSuccess;
     assert(kind == cudaMemcpyDeviceToHost);
@@ -774,6 +924,7 @@ extern "C" cudaError_t cudaMemset(void *dst, int value, size_t count)
 {
     VirtIOArg arg;
     func();
+    init_primary_context();
     if(!dst || count<=0)
         return cudaSuccess;
     memset(&arg, 0, sizeof(VirtIOArg));
@@ -2424,10 +2575,9 @@ int init_sgx_ecdh(SGX_RA_ENV *sgx_ctx)
     sgx_ra_context_t context = INT_MAX;
     sgx_status_t status = SGX_SUCCESS;
     sgx_att_key_id_t selected_key_id = {0};
-    uint32_t k;
-    sgx_ec_key_128bit_t buf;
-
-    FILE* OUTPUT = stdout;   
+    // uint32_t k;
+    // sgx_ec_key_128bit_t buf;
+    // FILE* OUTPUT = stdout;   
 
         debug("\nWe will try EPID algorithm.\n");
         // Preparation for remote attestation by configuring extended epid group id.
@@ -2526,7 +2676,7 @@ int init_sgx_ecdh(SGX_RA_ENV *sgx_ctx)
 
                 debug("\nMSG1 body generated -\n");
 
-                PRINT_BYTE_ARRAY(OUTPUT, p_msg1, sizeof(sgx_ra_msg1_t));
+                // PRINT_BYTE_ARRAY(OUTPUT, p_msg1, sizeof(sgx_ra_msg1_t));
 
             }
 
@@ -2552,7 +2702,7 @@ int init_sgx_ecdh(SGX_RA_ENV *sgx_ctx)
                 // Time now to check msg2.
                 debug("\nSent MSG1 to remote attestation service "
                                 "provider. Received the following MSG2:\n");
-                PRINT_BYTE_ARRAY(OUTPUT, p_msg_resp_body, resp_body_size);
+                // PRINT_BYTE_ARRAY(OUTPUT, p_msg_resp_body, resp_body_size);
             }
             debug("\nMSG2 resp size %x.\n", resp_body_size);
 
@@ -2596,7 +2746,7 @@ int init_sgx_ecdh(SGX_RA_ENV *sgx_ctx)
                 debug("\nMSG3 - \n");
             }
 
-            PRINT_BYTE_ARRAY(OUTPUT, p_msg3, msg3_size);
+            // PRINT_BYTE_ARRAY(OUTPUT, p_msg3, msg3_size);
             debug("\n msg3_size = 0x%x.\n", msg3_size);
             debug("\n sizeof(sgx_ra_msg3_t) = 0x%lx.\n", sizeof(sgx_ra_msg3_t));
             
@@ -2630,7 +2780,7 @@ int init_sgx_ecdh(SGX_RA_ENV *sgx_ctx)
                                 "result message back\n.");
 
             debug("\nATTESTATION RESULT RECEIVED - ");
-            PRINT_BYTE_ARRAY(OUTPUT, p_att_result_msg_body, resp_body_size);
+            // PRINT_BYTE_ARRAY(OUTPUT, p_att_result_msg_body, resp_body_size);
 
             // Check the MAC using MK on the attestation result message.
             // The format of the attestation result message is ISV specific.
@@ -2668,7 +2818,7 @@ int init_sgx_ecdh(SGX_RA_ENV *sgx_ctx)
 
             // Get the shared secret sent by the server using SK (if attestation
             // passed)
-            ret = enclave_key_out(enclave_id, &status, context, buf, sizeof(sgx_ec_key_128bit_t));
+            /*ret = enclave_key_out(enclave_id, &status, context, buf, sizeof(sgx_ec_key_128bit_t));
             if((SGX_SUCCESS != ret)  || (SGX_SUCCESS != status))
             {
                 error("\nError, can not get secret "
@@ -2692,7 +2842,7 @@ int init_sgx_ecdh(SGX_RA_ENV *sgx_ctx)
             for (k=0; k<SAMPLE_SP_TAG_SIZE; k++) {
                 debug_clean("%x ", p_att_result_msg_body->secret.payload_tag[k]);
             }
-            debug_clean("\n\n");
+            debug_clean("\n\n");*/
             ret = put_secret_data(enclave_id,
                                   &status,
                                   context,
@@ -2703,12 +2853,12 @@ int init_sgx_ecdh(SGX_RA_ENV *sgx_ctx)
             {
                 error("\nError, attestation result message secret "
                                 "using SK based AESGCM failed in [%s]. ret = "
-                                "0x%0x. status = 0x%0x", __FUNCTION__, ret,
+                                "0x%0x. status = 0x%0x\n", __FUNCTION__, ret,
                                  status);
                 goto CLEANUP;
             }
-            debug("\nSecret successfully received from server.");
-            debug("\nRemote attestation success!");
+            debug("Secret successfully received from server.\n");
+            debug("Remote attestation success!\n");
             
         }
         sgx_ctx->context    = context;
@@ -2772,20 +2922,44 @@ static int fini_sgx_ecdh(SGX_RA_ENV sgx_ctx)
     return ret;
 }
 
-// static void *encrypt_data(uint8_t *msg)
-// {
-//     ret = put_secret_data(enclave_id,
-//                           &status,
-//                           context,
-//                           p_att_result_msg_body->secret.payload,
-//                           p_att_result_msg_body->secret.payload_size,
-//                           p_att_result_msg_body->secret.payload_tag);
-//     if((SGX_SUCCESS != ret)  || (SGX_SUCCESS != status))
-//     {
-//         fprintf(OUTPUT, "\nError, attestation result message secret "
-//                         "using SK based AESGCM failed in [%s]. ret = "
-//                         "0x%0x. status = 0x%0x", __FUNCTION__, ret,
-//                          status);
-//         goto CLEANUP;
-//     }
-// }
+
+extern "C" cudaError_t cudaMemcpySafe(void *dst, const void *src, size_t count, enum cudaMemcpyKind kind)
+{
+    VirtIOArg arg;
+    uint8_t payload_tag[SAMPLE_SP_TAG_SIZE];
+    uint8_t *data;
+
+    func();
+    if (kind <0 || kind >4) {
+        return cudaErrorInvalidMemcpyDirection;
+    }
+    if(count<=0 || !dst || !src )
+        return cudaSuccess;
+    if (kind == cudaMemcpyHostToHost) {
+        memcpy(dst, src, count);
+        return cudaSuccess;
+    } 
+    memset(&arg, 0, sizeof(VirtIOArg));
+    arg.cmd     = VIRTIO_SGX_MEMCPY;
+    arg.flag    = kind;
+    arg.src     = (uint64_t)src;
+    arg.srcSize = (uint32_t)count;
+    arg.dst     = (uint64_t)dst;
+    arg.dstSize = (uint32_t)count;
+    arg.tid     = (uint32_t)syscall(SYS_gettid);
+    debug("gettid %d\n", arg.tid);
+    if (kind == cudaMemcpyHostToDevice) {
+        data = (uint8_t *)malloc(count);
+        get_encrypted_data((uint8_t *)src, count, data, payload_tag);
+        memcpy(arg.mac, payload_tag, SAMPLE_SP_TAG_SIZE);
+        arg.src = (uint64_t)data;
+    }
+    send_to_device(VIRTIO_IOC_SGX_MEMCPY, &arg);
+    if (kind == cudaMemcpyDeviceToHost) {
+        data = (uint8_t *)malloc(count);
+        get_decrypted_data((uint8_t *)arg.dst, count, data, arg.mac);
+        memcpy(dst, data, count);
+    }
+    SAFE_FREE(data);
+    return (cudaError_t)arg.cmd;    
+}

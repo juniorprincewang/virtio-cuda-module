@@ -12,6 +12,20 @@ __global__ void test(float *a, int size)
         a[idx] = dfactor;
 }
 
+__global__ void test2(float *a, int size)
+{
+    int idx = threadIdx.x;
+    if(idx<size)
+        a[idx] = dfactor;
+}
+
+__global__ void test3(float *a, int size)
+{
+    int idx = threadIdx.x;
+    if(idx<size)
+        a[idx] = dfactor;
+}
+
 int main(void)
 {
 
@@ -21,7 +35,7 @@ int main(void)
 
     float *da;
     float ha=0;
-
+    /*
     std::cout << "the original value is " << ha << std::endl;
     cudaMalloc((void **)&da, sizeof(float));
     test<<<1,1>>>(da,1);
@@ -29,6 +43,6 @@ int main(void)
     cudaFree(da);
     cudaDeviceSynchronize();
     std::cout << "the value is now " << ha << std::endl;
-
+    */
     return 0;
 }
