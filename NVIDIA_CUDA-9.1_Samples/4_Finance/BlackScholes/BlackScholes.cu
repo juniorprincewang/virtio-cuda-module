@@ -104,14 +104,20 @@ int main(int argc, char **argv)
 
     printf("Initializing data...\n");
     printf("...allocating CPU memory for options.\n");
-    h_CallResultCPU = (float *)malloc(OPT_SZ);
-    h_PutResultCPU  = (float *)malloc(OPT_SZ);
-    h_CallResultGPU = (float *)malloc(OPT_SZ);
-    h_PutResultGPU  = (float *)malloc(OPT_SZ);
-    h_StockPrice    = (float *)malloc(OPT_SZ);
-    h_OptionStrike  = (float *)malloc(OPT_SZ);
-    h_OptionYears   = (float *)malloc(OPT_SZ);
-
+    // h_CallResultCPU = (float *)malloc(OPT_SZ);
+    // h_PutResultCPU  = (float *)malloc(OPT_SZ);
+    // h_CallResultGPU = (float *)malloc(OPT_SZ);
+    // h_PutResultGPU  = (float *)malloc(OPT_SZ);
+    // h_StockPrice    = (float *)malloc(OPT_SZ);
+    // h_OptionStrike  = (float *)malloc(OPT_SZ);
+    // h_OptionYears   = (float *)malloc(OPT_SZ);
+    h_CallResultCPU = (float *)my_malloc(OPT_SZ);
+    h_PutResultCPU  = (float *)my_malloc(OPT_SZ);
+    h_CallResultGPU = (float *)my_malloc(OPT_SZ);
+    h_PutResultGPU  = (float *)my_malloc(OPT_SZ);
+    h_StockPrice    = (float *)my_malloc(OPT_SZ);
+    h_OptionStrike  = (float *)my_malloc(OPT_SZ);
+    h_OptionYears   = (float *)my_malloc(OPT_SZ);
     printf("...allocating GPU memory for options.\n");
     checkCudaErrors(cudaMalloc((void **)&d_CallResult,   OPT_SZ));
     checkCudaErrors(cudaMalloc((void **)&d_PutResult,    OPT_SZ));
@@ -227,13 +233,20 @@ int main(int argc, char **argv)
     checkCudaErrors(cudaFree(d_CallResult));
 
     printf("...releasing CPU memory.\n");
-    free(h_OptionYears);
-    free(h_OptionStrike);
-    free(h_StockPrice);
-    free(h_PutResultGPU);
-    free(h_CallResultGPU);
-    free(h_PutResultCPU);
-    free(h_CallResultCPU);
+    // free(h_OptionYears);
+    // free(h_OptionStrike);
+    // free(h_StockPrice);
+    // free(h_PutResultGPU);
+    // free(h_CallResultGPU);
+    // free(h_PutResultCPU);
+    // free(h_CallResultCPU);
+    my_free(h_OptionYears);
+    my_free(h_OptionStrike);
+    my_free(h_StockPrice);
+    my_free(h_PutResultGPU);
+    my_free(h_CallResultGPU);
+    my_free(h_PutResultCPU);
+    my_free(h_CallResultCPU);
     sdkDeleteTimer(&hTimer);
     printf("Shutdown done.\n");
 

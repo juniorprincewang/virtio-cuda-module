@@ -276,8 +276,10 @@ int main(int argc, char **argv)
     sdkCreateTimer(&hTimer);
 
     printf("Allocating memory...\n");
-    h_idataCPU = (unsigned char *)malloc(MemorySize);
-    h_odataGPU = (unsigned char *)malloc(MemorySize);
+    // h_idataCPU = (unsigned char *)malloc(MemorySize);
+    // h_odataGPU = (unsigned char *)malloc(MemorySize);
+    h_idataCPU = (unsigned char *)my_malloc(MemorySize);
+    h_odataGPU = (unsigned char *)my_malloc(MemorySize);
     checkCudaErrors(cudaMalloc((void **)&d_idata, MemorySize));
     checkCudaErrors(cudaMalloc((void **)&d_odata, MemorySize));
 
@@ -334,8 +336,10 @@ int main(int argc, char **argv)
     printf("Shutting down...\n");
     checkCudaErrors(cudaFree(d_idata));
     checkCudaErrors(cudaFree(d_odata));
-    free(h_odataGPU);
-    free(h_idataCPU);
+    // free(h_odataGPU);
+    // free(h_idataCPU);
+    my_free(h_odataGPU);
+    my_free(h_idataCPU);
 
     sdkDeleteTimer(&hTimer);
 

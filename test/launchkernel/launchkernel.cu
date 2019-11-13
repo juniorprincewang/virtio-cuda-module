@@ -75,16 +75,17 @@ int main()
 	int devID=1;
 	int count = 0;
 	struct cudaDeviceProp props;
-	float *d_a=0;
+	float *d_a=0, *d_b;
 	float *h_a=0;
 	dim3 block, grid;
-	int num = 1 << 8;
+	int num = 1 << 14;
     int nbytes = num * sizeof(float);
     int value=41;
     struct timeval malloc_start, malloc_end;
     struct timeval meminit_start, meminit_end;
     struct timeval free_start, free_end;
     struct timeval d_malloc_start, d_malloc_end;
+    struct timeval d_malloc_b_start, d_malloc_b_end;
     struct timeval d_meminit_start, d_meminit_end;
     struct timeval d_free_start, d_free_end;
     struct timeval HtoD_start, HtoD_end;
@@ -141,6 +142,13 @@ int main()
 	#endif
 	printf("d_a address = %p\n", d_a);
 	#ifdef  TIMING
+		gettimeofday(&d_malloc_b_start, NULL);
+	#endif
+	CHECK(cudaMalloc((void**)&d_b, nbytes));
+	#ifdef  TIMING
+		gettimeofday(&d_malloc_b_end, NULL);
+	#endif
+	#ifdef  TIMING
 		gettimeofday(&d_meminit_start, NULL);
 	#endif
 	CHECK(cudaMemset(d_a, 0, nbytes));
@@ -155,9 +163,9 @@ int main()
 	#ifdef  TIMING
 		gettimeofday(&HtoD_start, NULL);
 	#endif
-	// CHECK(cudaMemcpy(d_a, h_a, nbytes, cudaMemcpyHostToDevice));
+	CHECK(cudaMemcpy(d_a, h_a, nbytes, cudaMemcpyHostToDevice));
 	// CHECK(cudaMemcpy(d_a, h_a, nbytes, cudaMemcpyDefault));
-	CHECK(cudaMemcpySafe(d_a, h_a, nbytes, cudaMemcpyHostToDevice));
+	// CHECK(cudaMemcpySafe(d_a, h_a, nbytes, cudaMemcpyHostToDevice));
 	#ifdef  TIMING
 		gettimeofday(&HtoD_end, NULL);
 	#endif
@@ -172,9 +180,9 @@ int main()
 	#ifdef  TIMING
 		gettimeofday(&DtoH_start, NULL);
 	#endif
-	// CHECK(cudaMemcpy(h_a, d_a, nbytes, cudaMemcpyDeviceToHost));
+	CHECK(cudaMemcpy(h_a, d_a, nbytes, cudaMemcpyDeviceToHost));
 	// CHECK(cudaMemcpy(h_a, d_a, nbytes, cudaMemcpyDefault));
-	CHECK(cudaMemcpySafe(h_a, d_a, nbytes, cudaMemcpyDeviceToHost));
+	// CHECK(cudaMemcpySafe(h_a, d_a, nbytes, cudaMemcpyDeviceToHost));
 	#ifdef  TIMING
 		gettimeofday(&DtoH_end, NULL);
 	#endif
@@ -212,6 +220,7 @@ int main()
 	double meminit_time 	= tvsub(meminit_start, meminit_end);
 	double free_time 	= tvsub(free_start, free_end);
 	double d_malloc_time 	= tvsub(d_malloc_start, d_malloc_end);
+	double d_malloc_b_time 	= tvsub(d_malloc_b_start, d_malloc_b_end);
 	double d_meminit_time 	= tvsub(d_meminit_start, d_meminit_end);
 	double d_free_time 	= tvsub(d_free_start, d_free_end);
 	double HtoD_time 	= tvsub(HtoD_start, HtoD_end);
@@ -222,7 +231,8 @@ int main()
 	printf("total_time : \t\t%f\n", total_time);
 	printf("host malloc: \t\t%f\n", malloc_time);
 	printf("host mem init: \t\t%f\n", meminit_time);
-	printf("device malloc: \t\t%f\n", d_malloc_time);
+	printf("device malloc a: \t%f\n", d_malloc_time);
+	printf("device malloc b: \t%f\n", d_malloc_b_time);
 	printf("device mem init: \t%f\n", d_meminit_time);
 	printf("HtoD: \t\t\t%f\n", HtoD_time);
 	printf("Exec: \t\t\t%f\n", kernel_time);
