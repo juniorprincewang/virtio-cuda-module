@@ -619,6 +619,7 @@ extern "C" void __cudaRegisterFunction(
     VirtIOArg arg;
     computeFatBinaryFormat_t fatBinHeader;
     uint32_t buf_size = 0;
+    unsigned long offset = 0;
     func();
 
     fatBinHeader = (computeFatBinaryFormat_t)(*fatCubinHandle);
@@ -646,14 +647,18 @@ extern "C" void __cudaRegisterFunction(
                 sizeof(fatbin_buf_t) + p_binary->size + buf_size + sizeof(function_buf_t) );
         p_binary->total_size = roundup(sizeof(fatbin_buf_t) + p_binary->size + buf_size + sizeof(function_buf_t), 
                                     p_binary->block_size);
+        offset = (unsigned long)p_last_binary - (unsigned long)p_binary;
         p_binary = (fatbin_buf_t *)realloc(p_binary, p_binary->total_size);
         debug("realloc total_size %x\n", p_binary->total_size);
+        p_last_binary = (binary_buf_t *)((void*)p_binary + offset);
     }
     function_buf_t *p_func = (function_buf_t *)(p_binary->buf + p_binary->size);
     p_func->size    = buf_size;
     p_func->hostFun = (uint64_t)hostFun;
     memcpy(p_func->buf, deviceName, buf_size);
     p_binary->size += buf_size + sizeof(function_buf_t);
+    debug("p_binary->size = %x\n", p_binary->size);
+    debug("last binary nr_func = %x\n", p_last_binary->nr_func);
     p_last_binary->nr_func += 1;
     // send_to_device(VIRTIO_IOC_REGISTERFUNCTION, &arg);
     // if(arg.cmd != cudaSuccess)
@@ -678,6 +683,7 @@ extern "C" void __cudaRegisterVar(
     VirtIOArg arg;
     computeFatBinaryFormat_t fatBinHeader;
     uint32_t buf_size = 0;
+    unsigned long offset=0;
     func();
 
     fatBinHeader = (computeFatBinaryFormat_t)(*fatCubinHandle);
@@ -706,8 +712,10 @@ extern "C" void __cudaRegisterVar(
                sizeof(fatbin_buf_t) + p_binary->size + buf_size + sizeof(var_buf_t) );
         p_binary->total_size = roundup(sizeof(fatbin_buf_t) + p_binary->size + buf_size + sizeof(var_buf_t), 
                                     p_binary->block_size);
+        offset = (unsigned long)p_last_binary - (unsigned long)p_binary;
         p_binary = (fatbin_buf_t *)realloc(p_binary, p_binary->total_size);
         debug("realloc size %x\n", p_binary->total_size);
+        p_last_binary = (binary_buf_t *)((void*)p_binary + offset);
     }
     var_buf_t *p_var = (var_buf_t *)(p_binary->buf + p_binary->size);
     p_var->size     = buf_size;
@@ -912,6 +920,7 @@ extern "C" cudaError_t cudaMemcpy(void *dst, const void *src, size_t count, enum
     if (kind <0 || kind >4) {
         return cudaErrorInvalidMemcpyDirection;
     }
+    debug("cudaMemcpyKind %d\n", kind);
     if(!dst || !src || count<=0)
         return cudaSuccess;
     memset(&arg, 0, sizeof(VirtIOArg));
@@ -1071,7 +1080,6 @@ extern "C" cudaError_t cudaHostUnregister(void *ptr)
     arg.cmd = VIRTIO_CUDA_HOSTUNREGISTER;
     arg.tid = (uint32_t)syscall(SYS_gettid);
     arg.src = (uint64_t)ptr;
-    // arg.srcSize = malloc_usable_size(ptr);
     send_to_device(VIRTIO_IOC_HOSTUNREGISTER, &arg);
     return (cudaError_t)arg.cmd;
 }

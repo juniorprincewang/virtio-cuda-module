@@ -21,3 +21,15 @@ NVIDIA_CUDA-9.1_Samples/6_Advanced/scan/scan
 NVIDIA_CUDA-9.1_Samples/6_Advanced/sortingNetworks/sortingNetworks
 NVIDIA_CUDA-9.1_Samples/7_CUDALibraries/simpleCUBLAS/simpleCUBLAS
 NVIDIA_CUDA-9.1_Samples/7_CUDALibraries/MersenneTwisterGP11213/MersenneTwisterGP11213
+
+test/cublas/dasum
+test/cublas/daxpy
+test/cublas/ddot
+test/cublas/dscal
+test/cublas/sasum
+test/cublas/saxpy
+test/cublas/scopy
+test/cublas/sdot
+test/cublas/sgemm
+test/cublas/sgemv
+test/cublas/sscal
