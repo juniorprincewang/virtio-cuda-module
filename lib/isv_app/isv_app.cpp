@@ -23,6 +23,7 @@
 #include <pthread.h>
 #include <stdbool.h>
 #include <malloc.h>
+#include <sys/time.h>
 
 #include <limits.h>
 // Needed for definition of remote attestation messages.
@@ -43,6 +44,7 @@
 #define SAFE_FREE(ptr) {if (NULL != (ptr)) {free(ptr); (ptr) = NULL;}}
 #endif
 
+static char enclave_path[256];
 #define ENCLAVE_PATH "/usr/local/cuda/lib64/isv_enclave.signed.so"
 
 
@@ -54,7 +56,7 @@ static int global_init = 0;
 
 #ifdef VIRTIO_CUDA_DEBUG
     #define debug(fmt, arg...) printf("[DEBUG]: " fmt, ##arg)
-    #define func() printf("[FUNC] Now in %s\n", __FUNCTION__);
+    #define func() printf("[FUNC] PID %ld Now in %s\n", syscall(SYS_gettid), __FUNCTION__);
     #define debug_clean(fmt, arg...) printf("" fmt, ##arg)
 #else
     #define debug(fmt, arg...) 
@@ -215,6 +217,7 @@ static void *__mmalloc(size_t size)
     VirtIOArg arg;
     void *src = NULL;
     int alignment = 8;
+    func();
     // size_t page_size = sysconf(_SC_PAGESIZE);
     // debug("page size = %d\n", page_size);
     size_t data_start_offset = roundup(sizeof(BlockHeader), alignment);
@@ -365,8 +368,10 @@ static int open_vdevice()
     for(i=1; i<=device_count; i++) {
         sprintf(devname, DEVICE_FILE, i);
         fd = open(devname, MODE);
-        if(fd>= 0)
+        if(fd>= 0) {
+            sprintf(enclave_path, ENCLAVE_PATH, i);
             break;
+        }
         else if(errno==EBUSY) {
             debug("device %d is busy\n", i);
             continue;
@@ -393,6 +398,13 @@ static void close_vdevice()
 
 
 void my_library_init(void) {
+    #ifdef  TIMING
+        struct timeval total_start, total_end;
+        struct timeval ecdh_start, ecdh_end;
+    #endif
+    #ifdef  TIMING
+        gettimeofday(&total_start, NULL);
+    #endif
     size_t page_size = sysconf(_SC_PAGESIZE);
     debug("Init dynamic library.\n");
     global_init = 1;
@@ -400,7 +412,19 @@ void my_library_init(void) {
     if(open_vdevice() < 0)
         exit(-1);
     pthread_spin_init(&lock, 0);
+    #ifdef  TIMING
+        gettimeofday(&ecdh_start, NULL);
+    #endif
     init_sgx_ecdh(&sgx_env);
+    #ifdef  TIMING
+        gettimeofday(&ecdh_end, NULL);
+    #endif
+    #ifdef  TIMING
+        double ecdh_time   = (double)(ecdh_end.tv_usec - ecdh_start.tv_usec)/1000000 +
+                        (double)(ecdh_end.tv_sec - ecdh_start.tv_sec);
+        printf("ecdh time: \t\t%f\n", ecdh_time);
+    #endif
+
     p_binary = (fatbin_buf_t *)__libc_malloc(page_size<<5);
     if (!p_binary) {
         error("Failed to allocate primary context buffer.\n");
@@ -412,6 +436,14 @@ void my_library_init(void) {
     p_binary->nr_binary = 0;
     p_binary->total_size = page_size<<5;
     p_binary->block_size = page_size<<3;
+    #ifdef  TIMING
+        gettimeofday(&total_end, NULL);
+    #endif
+    #ifdef  TIMING
+        double total_time   = (double)(total_end.tv_usec - total_start.tv_usec)/1000000 +
+                        (double)(total_end.tv_sec - total_start.tv_sec);
+        printf("init library time: \t\t%f\n", total_time);
+    #endif
 }
 
 void my_library_fini(void) {
@@ -511,6 +543,7 @@ extern "C" void** __cudaRegisterFatBinary(void *fatCubin)
     unsigned int magic;
     unsigned long long **fatCubinHandle;
     uint32_t size;
+    struct fatBinaryHeader *fatHeader;
 #ifdef VIRTIO_ENC
     uint8_t payload_tag[SAMPLE_SP_TAG_SIZE];
 #endif
@@ -527,7 +560,7 @@ extern "C" void** __cudaRegisterFatBinary(void *fatCubin)
         debug("data =   %p\n", binary->data);
         debug("filename_or_fatbins  =   %p\n", binary->filename_or_fatbins);
         *fatCubinHandle = (unsigned long long*)binary->data;
-        struct fatBinaryHeader *fatHeader = (struct fatBinaryHeader*)binary->data;
+        fatHeader = (struct fatBinaryHeader*)binary->data;
         debug("FatBinHeader = %p\n", fatHeader);
         debug("magic    =   0x%x\n", fatHeader->magic);
         debug("version  =   0x%x\n", fatHeader->version);
@@ -542,6 +575,11 @@ extern "C" void** __cudaRegisterFatBinary(void *fatCubin)
         arg.dstSize = 0;
         arg.cmd     = VIRTIO_CUDA_REGISTERFATBINARY;
         arg.tid     = (uint32_t)syscall(SYS_gettid);
+        if(fatHeader->fatSize == 0) {
+            debug("Invalid fatbin.\n");
+            p_last_binary = NULL;
+            return (void **)fatCubinHandle;
+        }
         // 
         if(p_binary->total_size < sizeof(fatbin_buf_t) + p_binary->size + size + sizeof(binary_buf_t)) {
             debug("realloc size %x to %lx\n", p_binary->total_size, 
@@ -621,6 +659,8 @@ extern "C" void __cudaRegisterFunction(
     uint32_t buf_size = 0;
     unsigned long offset = 0;
     func();
+    if(!p_last_binary)
+        return;
 
     fatBinHeader = (computeFatBinaryFormat_t)(*fatCubinHandle);
 //  debug(" fatbin magic= 0x%x\n", fatBinHeader->magic);
@@ -685,6 +725,8 @@ extern "C" void __cudaRegisterVar(
     uint32_t buf_size = 0;
     unsigned long offset=0;
     func();
+    if(!p_last_binary)
+        return;
 
     fatBinHeader = (computeFatBinaryFormat_t)(*fatCubinHandle);
     debug(" fatCubinHandle = %p, value =%p\n", fatCubinHandle, *fatCubinHandle);
@@ -1191,7 +1233,19 @@ extern "C" cudaError_t cudaGetDeviceCount(int *count)
     arg.tid = (uint32_t)syscall(SYS_gettid);
     send_to_device(VIRTIO_IOC_GETDEVICECOUNT, &arg);
     *count  = (int)arg.flag;
-    return (cudaError_t)arg.cmd;    
+    return (cudaError_t)arg.cmd;
+}
+
+extern "C" cudaError_t cudaDeviceSetCacheConfig(enum cudaFuncCache cacheConfig)
+{
+    VirtIOArg arg;
+    func();
+    memset(&arg, 0, sizeof(VirtIOArg));
+    arg.cmd = VIRTIO_CUDA_DEVICESETCACHECONFIG;
+    arg.tid = (uint32_t)syscall(SYS_gettid);
+    arg.flag = (uint64_t)cacheConfig;
+    send_to_device(VIRTIO_IOC_DEVICESETCACHECONFIG, &arg);
+    return (cudaError_t)arg.cmd;
 }
 
 extern "C" cudaError_t cudaDeviceReset(void)
@@ -2401,19 +2455,6 @@ extern "C" cublasStatus_t cublasGetMatrix (int rows, int cols, int elemSize,
 /******CURAND***********/
 /*****************************************************************************/
 
-extern "C" curandStatus_t CURANDAPI 
-curandCreateGenerator(curandGenerator_t *generator, curandRngType_t rng_type)
-{
-    VirtIOArg arg;
-    func();
-    memset(&arg, 0, sizeof(VirtIOArg));
-    debug("sizeof(curandGenerator_t) = %lx\n", sizeof(curandGenerator_t));
-    arg.cmd     = VIRTIO_CURAND_CREATEGENERATOR;
-    arg.dst     = (uint64_t)rng_type;
-    send_to_device(VIRTIO_IOC_CURAND_CREATEGENERATOR, &arg);
-    *generator  = (curandGenerator_t)arg.flag;
-    return (curandStatus_t)arg.cmd;
-}
 
 extern "C" curandStatus_t CURANDAPI 
 curandCreateGeneratorHost(curandGenerator_t *generator, curandRngType_t rng_type)
@@ -2453,6 +2494,8 @@ curandGenerateNormal(curandGenerator_t generator, float *outputPtr,
     uint64_t idx = 0;
 
     func();
+    if(!generator)
+        return CURAND_STATUS_SUCCESS;
     memset(&arg, 0, sizeof(VirtIOArg));
     arg.cmd     = VIRTIO_CURAND_GENERATENORMAL;
     arg.src     = (uint64_t)generator;
@@ -2481,6 +2524,8 @@ curandGenerateNormalDouble(curandGenerator_t generator, double *outputPtr,
     uint64_t idx = 0;
 
     func();
+    if(!generator)
+        return CURAND_STATUS_SUCCESS;
     memset(&arg, 0, sizeof(VirtIOArg));
     arg.cmd     = VIRTIO_CURAND_GENERATENORMALDOUBLE;
     arg.src     = (uint64_t)generator;
@@ -2504,6 +2549,8 @@ curandGenerateUniform(curandGenerator_t generator, float *outputPtr, size_t num)
 {
     VirtIOArg arg;
     func();
+    if(!generator)
+        return CURAND_STATUS_SUCCESS;
     memset(&arg, 0, sizeof(VirtIOArg));
     arg.cmd     = VIRTIO_CURAND_GENERATEUNIFORM;
     arg.src     = (uint64_t)generator;
@@ -2519,6 +2566,8 @@ curandGenerateUniformDouble(curandGenerator_t generator, double *outputPtr, size
 {
     VirtIOArg arg;
     func();
+    if(!generator)
+        return CURAND_STATUS_SUCCESS;
     memset(&arg, 0, sizeof(VirtIOArg));
     arg.cmd     = VIRTIO_CURAND_GENERATEUNIFORMDOUBLE;
     arg.src     = (uint64_t)generator;
@@ -2534,6 +2583,8 @@ curandDestroyGenerator(curandGenerator_t generator)
 {
     VirtIOArg arg;
     func();
+    if(!generator)
+        return CURAND_STATUS_SUCCESS;
     memset(&arg, 0, sizeof(VirtIOArg));
     arg.cmd     = VIRTIO_CURAND_DESTROYGENERATOR;
     arg.src     = (uint64_t)generator;
@@ -2541,32 +2592,73 @@ curandDestroyGenerator(curandGenerator_t generator)
     return (curandStatus_t)arg.cmd;
 }
 
+typedef struct generator_buf
+{
+    curandGenerator_t generator;
+    unsigned long long seed;
+    unsigned long long offset;
+} generator_buf_t;
+static generator_buf_t p_last_generator;
+static generator_buf_t p_generator;
+
 extern "C" curandStatus_t CURANDAPI 
-curandSetGeneratorOffset(curandGenerator_t generator, unsigned long long offset)
+curandCreateGenerator(curandGenerator_t *generator, curandRngType_t rng_type)
 {
     VirtIOArg arg;
     func();
     memset(&arg, 0, sizeof(VirtIOArg));
-    arg.cmd     = VIRTIO_CURAND_SETGENERATOROFFSET;
-    arg.src     = (uint64_t)generator;
-    arg.param   = (uint64_t)offset;
-    send_to_device(VIRTIO_IOC_CURAND_SETGENERATOROFFSET, &arg);
+    // debug("sizeof(curandGenerator_t) = %lx\n", sizeof(curandGenerator_t));
+    arg.cmd     = VIRTIO_CURAND_CREATEGENERATOR;
+    arg.dst     = (uint64_t)rng_type;
+    send_to_device(VIRTIO_IOC_CURAND_CREATEGENERATOR, &arg);
+    *generator  = (curandGenerator_t)arg.flag;
     return (curandStatus_t)arg.cmd;
 }
 
 extern "C" curandStatus_t CURANDAPI 
 curandSetPseudoRandomGeneratorSeed(curandGenerator_t generator, unsigned long long seed)
 {
-    VirtIOArg arg;
+    // VirtIOArg arg;
     func();
-    memset(&arg, 0, sizeof(VirtIOArg));
-    arg.cmd     = VIRTIO_CURAND_SETPSEUDORANDOMSEED;
-    arg.src     = (uint64_t)generator;
-    arg.param   = (uint64_t)seed;
-    send_to_device(VIRTIO_IOC_CURAND_SETPSEUDORANDOMSEED, &arg);
-    return (curandStatus_t)arg.cmd;
+    if(!generator)
+        return CURAND_STATUS_SUCCESS;
+    debug("generator %lx , seed = %llx\n", (uint64_t)generator, seed);
+    // memset(&arg, 0, sizeof(VirtIOArg));
+    // arg.cmd     = VIRTIO_CURAND_SETPSEUDORANDOMSEED;
+    // arg.src     = (uint64_t)generator;
+    // arg.param   = (uint64_t)seed;
+    // send_to_device(VIRTIO_IOC_CURAND_SETPSEUDORANDOMSEED, &arg);
+    // return (curandStatus_t)arg.cmd;
+    p_generator.generator  = generator;
+    p_generator.seed       = seed;
+    return CURAND_STATUS_SUCCESS;
 }
 
+extern "C" curandStatus_t CURANDAPI 
+curandSetGeneratorOffset(curandGenerator_t generator, unsigned long long offset)
+{
+    VirtIOArg arg;
+    func();
+    if(!generator)
+        return CURAND_STATUS_SUCCESS;
+    debug("generator %lx , offset = %llx\n", (uint64_t)generator, offset);
+    p_generator.offset = offset;
+    if(p_last_generator.generator == generator && 
+        p_last_generator.seed == p_generator.seed &&
+        p_last_generator.offset == offset 
+        ) {
+        debug("stay same!\n");
+        return CURAND_STATUS_SUCCESS;
+    }
+    memset(&arg, 0, sizeof(VirtIOArg));
+    arg.cmd     = VIRTIO_CURAND_SETGENERATOROFFSET;
+    arg.src     = (uint64_t)generator;
+    arg.param   = (uint64_t)offset;
+    arg.param2   = (uint64_t)p_generator.seed;
+    memcpy(&p_last_generator, &p_generator, sizeof(generator_buf_t));
+    send_to_device(VIRTIO_IOC_CURAND_SETGENERATOROFFSET, &arg);
+    return (curandStatus_t)arg.cmd;
+}
 //**************************SGX**********************************************//
 //***************************************************************************//
 
@@ -2658,13 +2750,12 @@ int init_sgx_ecdh(SGX_RA_ENV *sgx_ctx)
     sgx_ra_msg1_t *p_msg1;
     sgx_ra_msg3_t *p_msg3 = NULL;
     sgx_enclave_id_t enclave_id = 0;
+    sgx_enclave_id_t enclave_id2 = 0;
     int enclave_lost_retry_time = 1;
     int busy_retry_time = 4;
     sgx_ra_context_t context = INT_MAX;
     sgx_status_t status = SGX_SUCCESS;
     sgx_att_key_id_t selected_key_id = {0};
-    // uint32_t k;
-    // sgx_ec_key_128bit_t buf;
     // FILE* OUTPUT = stdout;   
 
         debug("\nWe will try EPID algorithm.\n");
@@ -2691,6 +2782,7 @@ int init_sgx_ecdh(SGX_RA_ENV *sgx_ctx)
                 goto CLEANUP;
             }
             debug("\nSent MSG0 to remote attestation service.\n");
+            
             debug("\nQEMU MSG0 resp size 0x%x.\n", resp_body_size);
             ret = sgx_select_att_key_id(p_msg_resp_body, resp_body_size, &selected_key_id);
             if(SGX_SUCCESS != ret)
@@ -2711,7 +2803,7 @@ int init_sgx_ecdh(SGX_RA_ENV *sgx_ctx)
             // ISV application creates the ISV enclave.
             do
             {
-                ret = sgx_create_enclave(ENCLAVE_PATH,
+                ret = sgx_create_enclave(enclave_path,
                                          SGX_DEBUG_FLAG,
                                          NULL,
                                          NULL,
@@ -2722,7 +2814,7 @@ int init_sgx_ecdh(SGX_RA_ENV *sgx_ctx)
                     error("\nError, call sgx_create_enclave fail.\n");
                     goto CLEANUP;
                 }
-                debug("\nCall sgx_create_enclave success.");
+                debug("\nCall sgx_create_enclave success. %lx\n", enclave_id);
 
                 ret = enclave_init_ra(enclave_id,
                                       &status,
@@ -2749,8 +2841,9 @@ int init_sgx_ecdh(SGX_RA_ENV *sgx_ctx)
             do
             {
                 ret = sgx_ra_get_msg1_ex(&selected_key_id, context, enclave_id, sgx_ra_get_ga, p_msg1);
-                if (SGX_ERROR_BUSY == ret)
-                    sleep(1); // Wait 1 s between retries
+                if (SGX_ERROR_BUSY == ret) {
+                    debug("SGX BUSY %ld, TRY again\n", syscall(SYS_gettid));
+                }
             } while (SGX_ERROR_BUSY == ret && busy_retry_time--);
             if(SGX_SUCCESS != ret)
             {
@@ -2761,11 +2854,8 @@ int init_sgx_ecdh(SGX_RA_ENV *sgx_ctx)
             else
             {
                 debug("\nCall sgx_ra_get_msg1_ex success.\n");
-
                 debug("\nMSG1 body generated -\n");
-
                 // PRINT_BYTE_ARRAY(OUTPUT, p_msg1, sizeof(sgx_ra_msg1_t));
-
             }
 
 
@@ -2811,8 +2901,9 @@ int init_sgx_ecdh(SGX_RA_ENV *sgx_ctx)
                                    resp_body_size,
                                    &p_msg3,
                                    &msg3_size);
-                if (SGX_ERROR_BUSY == ret)
-                    sleep(1); // Wait 1 s between retries
+                if (SGX_ERROR_BUSY == ret) {
+                    debug("SGX BUSY %ld, TRY again\n", syscall(SYS_gettid));
+                }
             } while (SGX_ERROR_BUSY == ret && busy_retry_time--);
             if(!p_msg3)
             {

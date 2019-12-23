@@ -1243,7 +1243,7 @@ static unsigned long *find_gpa_array_start_addr(uint64_t addr, size_t size,
 	return gpa_array;
 }
 
-static struct virtio_uvm_page * uvirt_to_phys_pages(const unsigned long __user buf, size_t count)
+static struct virtio_uvm_page * uvirt_to_phys_pages(const unsigned long __user buf, size_t count, int write_flag)
 {
     int     pages;
     struct  page **page_list;
@@ -1254,7 +1254,10 @@ static struct virtio_uvm_page * uvirt_to_phys_pages(const unsigned long __user b
     struct virtio_uvm_page *page_uvm= NULL;
 
     func();
-    user_pages_flags |= FOLL_WRITE;
+    // if the attribute of mmapped file is O_RDONLY, then FOLL_WRITE will be excluded
+    // So, I decide to leave out the user_pages_flags
+    if (write_flag)
+    	user_pages_flags |= FOLL_WRITE;
     gldebug("buf 0x%lx, count 0x%lx\n", (unsigned long)buf, count);
     nr_pages = (buf + count-1)/PAGE_SIZE - buf/PAGE_SIZE + 1;
     page_list = kvmalloc_array(nr_pages, sizeof(struct page *), GFP_KERNEL);
@@ -1443,7 +1446,7 @@ int cuda_primarycontext(VirtIOArg __user *arg, struct port *port)
 		return -ENOMEM;
 	}
 	payload->dst = (uint64_t)virt_to_phys(gva);*/
-	pages = uvirt_to_phys_pages((unsigned long __user)payload->src, from_size);
+	pages = uvirt_to_phys_pages((unsigned long __user)payload->src, from_size, 0);
 	if(!pages) {
 		pr_err("[ERROR] failed to mmap\n");
 		return -ENOMEM;
@@ -1830,7 +1833,7 @@ int cuda_host_register(VirtIOArg __user *arg, struct port *port)
 		gldebug("mmap address 0x%llx size 0x%x memory\n", payload->src, src_size);
 		payload->param = 0;
 		// if(src_size >= KMALLOC_SIZE) {
-			pages = uvirt_to_phys_pages((unsigned long __user)payload->src, src_size);
+			pages = uvirt_to_phys_pages((unsigned long __user)payload->src, src_size, 1);
 			if(!pages) {
 				pr_err("[ERROR] Failed to mmap\n");
 				return -ENOMEM;
@@ -2188,7 +2191,7 @@ HtoD:
 		if(!find_page_by_addr(payload->src, port)) {
 			payload->param = 0;
 			if(src_size >= KMALLOC_SIZE) {
-				pages = uvirt_to_phys_pages((unsigned long __user)payload->src, src_size);
+				pages = uvirt_to_phys_pages((unsigned long __user)payload->src, src_size, 0);
 				if(!pages) {
 					pr_err("[ERROR] Failed to mmap\n");
 					ret = -ENOMEM;
@@ -2232,7 +2235,7 @@ DtoH:
 		if(!find_page_by_addr(payload->dst, port)) {
 			payload->param = 0;
 			if(src_size >= KMALLOC_SIZE) {
-				pages = uvirt_to_phys_pages((unsigned long __user)payload->dst, src_size);
+				pages = uvirt_to_phys_pages((unsigned long __user)payload->dst, src_size, 1);
 				if(!pages) {
 					pr_err("[ERROR] Failed to mmap\n");
 					ret = -ENOMEM;
@@ -2350,7 +2353,7 @@ HtoDAsync:
 		payload->param = 1;
 		if(!find_page_by_addr(payload->src, port)) {
 			payload->param  = 0;
-			pages = uvirt_to_phys_pages((unsigned long __user)payload->src, src_size);
+			pages = uvirt_to_phys_pages((unsigned long __user)payload->src, src_size, 0);
 			if(!pages) {
 				pr_err("[ERROR] Failed to mmap\n");
 				ret = -ENOMEM;
@@ -2381,7 +2384,7 @@ DtoHAsync:
 		payload->param = 1;
 		if(!find_page_by_addr(payload->dst, port)) {
 			payload->param 	= 0;
-			pages = uvirt_to_phys_pages((unsigned long __user)payload->dst, src_size);
+			pages = uvirt_to_phys_pages((unsigned long __user)payload->dst, src_size, 1);
 			if(!pages) {
 				pr_err("[ERROR] Failed to mmap\n");
 				ret = -ENOMEM;
@@ -2602,6 +2605,33 @@ int cuda_set_device(VirtIOArg __user *arg, struct port *port)
 		return -ENOMEM;
 	}
 	port->device = payload->flag;
+	#ifdef VIRTIO_LOCK
+	spin_lock(&port->io_lock);
+	#endif
+
+	ret = send_to_virtio(port, (void*)payload, arg_len);
+	#ifdef VIRTIO_LOCK
+	spin_unlock(&port->io_lock);
+	#endif
+
+	gldebug("[+] now analyse return buf\n");
+	gldebug("[+] arg->cmd = %d\n", payload->cmd);
+	put_user(payload->cmd, &arg->cmd);
+	kfree(payload);
+	return ret;
+}
+
+int cuda_device_set_cache_config(VirtIOArg __user *arg, struct port *port)
+{
+	VirtIOArg *payload;
+	int ret;
+
+	func();
+	payload = (VirtIOArg *)memdup_user(arg, arg_len);
+	if(!payload) {
+		pr_err("[ERROR] can not malloc 0x%lx memory\n", arg_len);
+		return -ENOMEM;
+	}
 	#ifdef VIRTIO_LOCK
 	spin_lock(&port->io_lock);
 	#endif
@@ -4057,6 +4087,9 @@ static long port_fops_ioctl(struct file *filp, unsigned int cmd, unsigned long a
 			break;
 		case VIRTIO_IOC_SETDEVICE:
 			cuda_set_device((VirtIOArg __user*)arg, port);
+			break;
+		case VIRTIO_IOC_DEVICESETCACHECONFIG:
+			cuda_device_set_cache_config((VirtIOArg __user*)arg, port);
 			break;
 		case VIRTIO_IOC_GETDEVICECOUNT:
 			cuda_get_device_count((VirtIOArg __user*)arg, port);

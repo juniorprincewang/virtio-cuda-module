@@ -95,8 +95,10 @@ int main(int argc, char *argv[])
 
     printf("Initializing data...\n");
     printf("...allocating CPU memory\n");
-    h_Kernel    = (float *)malloc(KERNEL_SIZE);
-    h_Data      = (float *)malloc(DATA_SIZE);
+    // h_Kernel    = (float *)malloc(KERNEL_SIZE);
+    // h_Data      = (float *)malloc(DATA_SIZE);
+    h_Kernel    = (float *)my_malloc(KERNEL_SIZE);
+    h_Data      = (float *)my_malloc(DATA_SIZE);
     h_ResultCPU = (float *)malloc(DATA_SIZE);
     h_ResultGPU = (float *)malloc(DATA_SIZE);
     printf("...allocating GPU memory\n");
@@ -160,8 +162,10 @@ int main(int argc, char *argv[])
     checkCudaErrors(cudaFree(d_Kernel));
     free(h_ResultGPU);
     free(h_ResultCPU);
-    free(h_Data);
-    free(h_Kernel);
+    // free(h_Data);
+    // free(h_Kernel);
+    my_free(h_Data);
+    my_free(h_Kernel);
 
     printf("L2 norm: %E\n", L2norm);
     printf(L2norm < 1e-6 ? "Test passed\n" : "Test failed!\n");

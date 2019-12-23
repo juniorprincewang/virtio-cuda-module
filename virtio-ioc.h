@@ -3,6 +3,7 @@
 
 // #define VIRTIO_CUDA_DEBUG
 // #define KMALLOC_SHIFT 22 // 4MB
+#define TIMING 
 #define KMALLOC_SHIFT 13
 #define KMALLOC_SIZE (1UL<<KMALLOC_SHIFT)
 #define VIRTIO_MAC
@@ -71,7 +72,8 @@
 
 #define VIRTIO_CUDA_PEEKATLASTERROR 			41
 #define VIRTIO_CUDA_EVENTQUERY 					42
-#define VIRTIO_CUDA_PRIMARYCONTEXT 			43
+#define VIRTIO_CUDA_PRIMARYCONTEXT 				43
+#define VIRTIO_CUDA_DEVICESETCACHECONFIG 		44
 //SGX----------------------------------
 #define VIRTIO_SGX_MSG0							80
 #define VIRTIO_SGX_MSG1							81
@@ -261,6 +263,8 @@ typedef struct VirtIOArg
 	_IOWR(VIRTIO_IOC_ID,42,VirtIOArg)
 #define VIRTIO_IOC_PRIMARYCONTEXT \
 	_IOWR(VIRTIO_IOC_ID,43,VirtIOArg)
+#define VIRTIO_IOC_DEVICESETCACHECONFIG \
+	_IOWR(VIRTIO_IOC_ID,44,VirtIOArg)
 // SGX-------------------------------
 #define VIRTIO_IOC_SGX_MSG0 \
 	_IOWR(VIRTIO_IOC_ID,80,VirtIOArg)

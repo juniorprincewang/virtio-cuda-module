@@ -82,10 +82,12 @@ int main(int argc, char **argv)
     printf("Image Width x Height = %i x %i\n\n", imageW, imageH);
     printf("Allocating and initializing host arrays...\n");
     h_Kernel    = (float *)malloc(KERNEL_LENGTH * sizeof(float));
-    h_Input     = (float *)malloc(imageW * imageH * sizeof(float));
+    // h_Input     = (float *)malloc(imageW * imageH * sizeof(float));
+    h_Input     = (float *)my_malloc(imageW * imageH * sizeof(float));
     h_Buffer    = (float *)malloc(imageW * imageH * sizeof(float));
     h_OutputCPU = (float *)malloc(imageW * imageH * sizeof(float));
-    h_OutputGPU = (float *)malloc(imageW * imageH * sizeof(float));
+    // h_OutputGPU = (float *)malloc(imageW * imageH * sizeof(float));
+    h_OutputGPU = (float *)my_malloc(imageW * imageH * sizeof(float));
     srand(200);
 
     for (unsigned int i = 0; i < KERNEL_LENGTH; i++)
@@ -180,10 +182,12 @@ int main(int argc, char **argv)
     checkCudaErrors(cudaFree(d_Buffer));
     checkCudaErrors(cudaFree(d_Output));
     checkCudaErrors(cudaFree(d_Input));
-    free(h_OutputGPU);
+    // free(h_OutputGPU);
+    my_free(h_OutputGPU);
     free(h_OutputCPU);
     free(h_Buffer);
-    free(h_Input);
+    // free(h_Input);
+    my_free(h_Input);
     free(h_Kernel);
 
     sdkDeleteTimer(&hTimer);

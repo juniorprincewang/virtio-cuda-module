@@ -132,10 +132,12 @@ int matrixMultiply(int argc, char **argv, int block_size, dim3 &dimsA, dim3 &dim
     // Allocate host memory for matrices A and B
     unsigned int size_A = dimsA.x * dimsA.y;
     unsigned int mem_size_A = sizeof(float) * size_A;
-    float *h_A = (float *)malloc(mem_size_A);
+    // float *h_A = (float *)malloc(mem_size_A);
+    float *h_A = (float *)my_malloc(mem_size_A);
     unsigned int size_B = dimsB.x * dimsB.y;
     unsigned int mem_size_B = sizeof(float) * size_B;
-    float *h_B = (float *)malloc(mem_size_B);
+    // float *h_B = (float *)malloc(mem_size_B);
+    float *h_B = (float *)my_malloc(mem_size_B);
 
     // Initialize host memory
     const float valB = 0.01f;
@@ -148,7 +150,8 @@ int matrixMultiply(int argc, char **argv, int block_size, dim3 &dimsA, dim3 &dim
     // Allocate host matrix C
     dim3 dimsC(dimsB.x, dimsA.y, 1);
     unsigned int mem_size_C = dimsC.x * dimsC.y * sizeof(float);
-    float *h_C = (float *) malloc(mem_size_C);
+    // float *h_C = (float *) malloc(mem_size_C);
+    float *h_C = (float *) my_malloc(mem_size_C);
 
     if (h_C == NULL)
     {
@@ -334,9 +337,12 @@ int matrixMultiply(int argc, char **argv, int block_size, dim3 &dimsA, dim3 &dim
     printf("%s\n", correct ? "Result = PASS" : "Result = FAIL");
 
     // Clean up memory
-    free(h_A);
-    free(h_B);
-    free(h_C);
+    // free(h_A);
+    // free(h_B);
+    // free(h_C);
+    my_free(h_A);
+    my_free(h_B);
+    my_free(h_C);
     cudaFree(d_A);
     cudaFree(d_B);
     cudaFree(d_C);

@@ -53,10 +53,14 @@ int main(int argc, char **argv)
 
     printf("Allocating and initializing host arrays...\n\n");
     sdkCreateTimer(&hTimer);
-    h_InputKey     = (uint *)malloc(N * sizeof(uint));
-    h_InputVal     = (uint *)malloc(N * sizeof(uint));
-    h_OutputKeyGPU = (uint *)malloc(N * sizeof(uint));
-    h_OutputValGPU = (uint *)malloc(N * sizeof(uint));
+    // h_InputKey     = (uint *)malloc(N * sizeof(uint));
+    // h_InputVal     = (uint *)malloc(N * sizeof(uint));
+    // h_OutputKeyGPU = (uint *)malloc(N * sizeof(uint));
+    // h_OutputValGPU = (uint *)malloc(N * sizeof(uint));
+    h_InputKey     = (uint *)my_malloc(N * sizeof(uint));
+    h_InputVal     = (uint *)my_malloc(N * sizeof(uint));
+    h_OutputKeyGPU = (uint *)my_malloc(N * sizeof(uint));
+    h_OutputValGPU = (uint *)my_malloc(N * sizeof(uint));
     srand(2001);
 
     for (uint i = 0; i < N; i++)
@@ -136,10 +140,15 @@ int main(int argc, char **argv)
     cudaFree(d_OutputKey);
     cudaFree(d_InputVal);
     cudaFree(d_InputKey);
-    free(h_OutputValGPU);
-    free(h_OutputKeyGPU);
-    free(h_InputVal);
-    free(h_InputKey);
+    // free(h_OutputValGPU);
+    // free(h_OutputKeyGPU);
+    // free(h_InputVal);
+    // free(h_InputKey);
+
+    my_free(h_OutputValGPU);
+    my_free(h_OutputKeyGPU);
+    my_free(h_InputVal);
+    my_free(h_InputKey);
 
     exit(flag ? EXIT_SUCCESS : EXIT_FAILURE);
 }
