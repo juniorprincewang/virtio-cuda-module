@@ -123,7 +123,7 @@ void constantInit(float *data, int size, float val)
         data[i] = val;
     }
 }
-
+#define TIMING 
 /**
  * Run a simple test of matrix multiplication using CUDA
  */
@@ -133,11 +133,40 @@ int matrixMultiply(int argc, char **argv, int block_size, dim3 &dimsA, dim3 &dim
     unsigned int size_A = dimsA.x * dimsA.y;
     unsigned int mem_size_A = sizeof(float) * size_A;
     // float *h_A = (float *)malloc(mem_size_A);
-    float *h_A = (float *)my_malloc(mem_size_A);
+    float *h_A;
+    #ifdef  TIMING
+        struct timeval malloc_start_a, malloc_end_a;
+        struct timeval malloc_start_b, malloc_end_b;
+    #endif
+    #ifdef  TIMING
+        gettimeofday(&malloc_start_a, NULL);
+    #endif
+    cudaMallocHost(&h_A, mem_size_A);
+    #ifdef  TIMING
+        gettimeofday(&malloc_end_a, NULL);
+    #endif
+    #ifdef  TIMING
+        double a_time   = (double)(malloc_end_a.tv_usec - malloc_start_a.tv_usec)/1000000 +
+                        (double)(malloc_end_a.tv_sec - malloc_start_a.tv_sec);
+        printf("malloc host A time: \t\t%f\n", a_time);
+    #endif
+
     unsigned int size_B = dimsB.x * dimsB.y;
     unsigned int mem_size_B = sizeof(float) * size_B;
     // float *h_B = (float *)malloc(mem_size_B);
-    float *h_B = (float *)my_malloc(mem_size_B);
+    float *h_B;
+    #ifdef  TIMING
+        gettimeofday(&malloc_start_b, NULL);
+    #endif
+    cudaMallocHost(&h_B, mem_size_B);
+    #ifdef  TIMING
+        gettimeofday(&malloc_end_b, NULL);
+    #endif
+    #ifdef  TIMING
+        double b_time   = (double)(malloc_end_b.tv_usec - malloc_start_b.tv_usec)/1000000 +
+                        (double)(malloc_end_b.tv_sec - malloc_start_b.tv_sec);
+        printf("malloc host B time: \t\t%f\n", b_time);
+    #endif
 
     // Initialize host memory
     const float valB = 0.01f;
@@ -151,7 +180,8 @@ int matrixMultiply(int argc, char **argv, int block_size, dim3 &dimsA, dim3 &dim
     dim3 dimsC(dimsB.x, dimsA.y, 1);
     unsigned int mem_size_C = dimsC.x * dimsC.y * sizeof(float);
     // float *h_C = (float *) malloc(mem_size_C);
-    float *h_C = (float *) my_malloc(mem_size_C);
+    float *h_C;
+    cudaMallocHost(&h_C, mem_size_C);
 
     if (h_C == NULL)
     {
@@ -340,9 +370,9 @@ int matrixMultiply(int argc, char **argv, int block_size, dim3 &dimsA, dim3 &dim
     // free(h_A);
     // free(h_B);
     // free(h_C);
-    my_free(h_A);
-    my_free(h_B);
-    my_free(h_C);
+    cudaFreeHost(h_A);
+    cudaFreeHost(h_B);
+    cudaFreeHost(h_C);
     cudaFree(d_A);
     cudaFree(d_B);
     cudaFree(d_C);
