@@ -222,8 +222,11 @@ endif
 	@touch .config_$(Build_Mode)_$(SGX_ARCH)
 
 install: all 
-	@sudo -u root cp $(App_Name) /usr/local/vcuda/lib64/
+	@sudo -u root cp $(App_Name) /usr/local/cuda/lib64/
 	@sudo -u root cp $(Signed_Enclave_Name) $(ENCLAVE_PATH)
+	@sudo -u root rm $(ENCLAVE_PATH)/libcudart.so.9.1 $(ENCLAVE_PATH)/libcudart.so
+	@sudo -u root ln -s $(ENCLAVE_PATH)/$(App_Name) $(ENCLAVE_PATH)/libcudart.so.9.1
+	@sudo -u root ln -s $(ENCLAVE_PATH)/libcudart.so.9.1 $(ENCLAVE_PATH)/libcudart.so
 
 ######## App Objects ########
 
