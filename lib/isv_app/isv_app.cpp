@@ -40,6 +40,9 @@
 // Needed to query extended epid group id.
 #include "sgx_uae_service.h"
 
+#include <sgx_uswitchless.h>
+
+
 #ifndef SAFE_FREE
 #define SAFE_FREE(ptr) {if (NULL != (ptr)) {free(ptr); (ptr) = NULL;}}
 #endif
@@ -117,17 +120,17 @@ typedef struct fatbin_buf
 
 static fatbin_buf_t *p_binary;
 
-typedef struct binary_buf
+typedef struct cubin_buf
 {
     uint32_t size;
     uint32_t nr_var;
     uint32_t nr_func;
-#ifdef VIRTIO_ENC
+#ifdef ENABLE_MAC
     uint8_t payload_tag[SAMPLE_SP_TAG_SIZE];
 #endif
     uint8_t  buf[];
-} binary_buf_t;
-static binary_buf_t *p_last_binary;
+} cubin_buf_t;
+static cubin_buf_t *p_last_binary;
 
 typedef struct function_buf
 {
@@ -412,10 +415,13 @@ void my_library_init(void) {
     if(open_vdevice() < 0)
         exit(-1);
     pthread_spin_init(&lock, 0);
+
     #ifdef  TIMING
         gettimeofday(&ecdh_start, NULL);
     #endif
+#ifdef ENABLE_SGX
     init_sgx_ecdh(&sgx_env);
+#endif
     #ifdef  TIMING
         gettimeofday(&ecdh_end, NULL);
     #endif
@@ -449,7 +455,9 @@ void my_library_init(void) {
 void my_library_fini(void) {
     debug("deinit dynamic library\n");
     __libc_free(p_binary);
+#ifdef ENABLE_SGX
     fini_sgx_ecdh(sgx_env);
+#endif
     close_vdevice();
 }
 
@@ -513,14 +521,14 @@ static void get_encrypted_data(uint8_t *src, uint32_t size, uint8_t *dst, uint8_
 static void init_primary_context()
 {
     VirtIOArg arg;
-#ifdef VIRTIO_ENC
+#ifdef ENABLE_MAC
     uint8_t payload_tag[SAMPLE_SP_TAG_SIZE];
 #endif
     if(!primary_context_initialized) {
         primary_context_initialized = true;
         memset(&arg, 0, ARG_LEN);
         debug("nr_binary %x\n", p_binary->nr_binary);
-#ifdef VIRTIO_ENC
+#ifdef ENABLE_MAC
         get_mac((uint8_t *)p_binary, p_binary->total_size, payload_tag);
         memcpy(arg.mac, payload_tag, SAMPLE_SP_TAG_SIZE);
 #endif
@@ -544,7 +552,7 @@ extern "C" void** __cudaRegisterFatBinary(void *fatCubin)
     unsigned long long **fatCubinHandle;
     uint32_t size;
     struct fatBinaryHeader *fatHeader;
-#ifdef VIRTIO_ENC
+#ifdef ENABLE_MAC
     uint8_t payload_tag[SAMPLE_SP_TAG_SIZE];
 #endif
  
@@ -581,27 +589,27 @@ extern "C" void** __cudaRegisterFatBinary(void *fatCubin)
             return (void **)fatCubinHandle;
         }
         // 
-        if(p_binary->total_size < sizeof(fatbin_buf_t) + p_binary->size + size + sizeof(binary_buf_t)) {
+        if(p_binary->total_size < sizeof(fatbin_buf_t) + p_binary->size + size + sizeof(cubin_buf_t)) {
             debug("realloc size %x to %lx\n", p_binary->total_size, 
-                sizeof(fatbin_buf_t) + p_binary->size + size + sizeof(binary_buf_t) );
-            p_binary->total_size = roundup(sizeof(fatbin_buf_t) + p_binary->size + size + sizeof(binary_buf_t), 
+                sizeof(fatbin_buf_t) + p_binary->size + size + sizeof(cubin_buf_t) );
+            p_binary->total_size = roundup(sizeof(fatbin_buf_t) + p_binary->size + size + sizeof(cubin_buf_t), 
                                     p_binary->block_size);
             p_binary = (fatbin_buf_t *)realloc(p_binary, p_binary->total_size);
             debug("realloc total_size %x\n", p_binary->total_size);
         }
         debug("p_binary->nr_binary %x\n", p_binary->nr_binary);
-        p_last_binary = (binary_buf_t *)(p_binary->buf + p_binary->size);
+        p_last_binary = (cubin_buf_t *)(p_binary->buf + p_binary->size);
         p_last_binary->size     = size;
         p_last_binary->nr_var   = 0;
         p_last_binary->nr_func  = 0;
-#ifdef VIRTIO_ENC
+#ifdef ENABLE_ENC
         debug("binary_data first 4 bytes %x\n", *(int*)binary->data);
         get_encrypted_data((uint8_t *)binary->data, size, p_last_binary->buf, payload_tag);
         memcpy(p_last_binary->payload_tag, payload_tag, SAMPLE_SP_TAG_SIZE);
 #else
         memcpy(p_last_binary->buf, binary->data, size);
 #endif
-        p_binary->size += size + sizeof(binary_buf_t);
+        p_binary->size += size + sizeof(cubin_buf_t);
         p_binary->nr_binary++;
         debug("p_binary->size is %x\n", p_binary->size);
         // send_to_device(VIRTIO_IOC_REGISTERFATBINARY, &arg);
@@ -690,7 +698,7 @@ extern "C" void __cudaRegisterFunction(
         offset = (unsigned long)p_last_binary - (unsigned long)p_binary;
         p_binary = (fatbin_buf_t *)realloc(p_binary, p_binary->total_size);
         debug("realloc total_size %x\n", p_binary->total_size);
-        p_last_binary = (binary_buf_t *)((void*)p_binary + offset);
+        p_last_binary = (cubin_buf_t *)((void*)p_binary + offset);
     }
     function_buf_t *p_func = (function_buf_t *)(p_binary->buf + p_binary->size);
     p_func->size    = buf_size;
@@ -757,7 +765,7 @@ extern "C" void __cudaRegisterVar(
         offset = (unsigned long)p_last_binary - (unsigned long)p_binary;
         p_binary = (fatbin_buf_t *)realloc(p_binary, p_binary->total_size);
         debug("realloc size %x\n", p_binary->total_size);
-        p_last_binary = (binary_buf_t *)((void*)p_binary + offset);
+        p_last_binary = (cubin_buf_t *)((void*)p_binary + offset);
     }
     var_buf_t *p_var = (var_buf_t *)(p_binary->buf + p_binary->size);
     p_var->size     = buf_size;
@@ -2750,7 +2758,6 @@ int init_sgx_ecdh(SGX_RA_ENV *sgx_ctx)
     sgx_ra_msg1_t *p_msg1;
     sgx_ra_msg3_t *p_msg3 = NULL;
     sgx_enclave_id_t enclave_id = 0;
-    sgx_enclave_id_t enclave_id2 = 0;
     int enclave_lost_retry_time = 1;
     int busy_retry_time = 4;
     sgx_ra_context_t context = INT_MAX;
@@ -2803,11 +2810,27 @@ int init_sgx_ecdh(SGX_RA_ENV *sgx_ctx)
             // ISV application creates the ISV enclave.
             do
             {
+            #ifndef SGX_SWITCHLESS
+                debug("\nCreate regular enclave.");
                 ret = sgx_create_enclave(enclave_path,
                                          SGX_DEBUG_FLAG,
                                          NULL,
                                          NULL,
                                          &enclave_id, NULL);
+            #else
+                const void* enclave_ex_p[32] = { 0 };
+                sgx_uswitchless_config_t us_config = SGX_USWITCHLESS_CONFIG_INITIALIZER;
+                us_config.num_uworkers = 2;
+                us_config.num_tworkers = 2;
+                enclave_ex_p[SGX_CREATE_ENCLAVE_EX_SWITCHLESS_BIT_IDX] = &us_config;
+                debug("\nCreate switchless enclave.");
+                ret = sgx_create_enclave_ex(enclave_path,
+                                         SGX_DEBUG_FLAG,
+                                         NULL,
+                                         NULL,
+                                         &enclave_id, NULL,
+                                         SGX_CREATE_ENCLAVE_EX_SWITCHLESS, enclave_ex_p);
+            #endif
                 if(SGX_SUCCESS != ret)
                 {
                     ret = -1;

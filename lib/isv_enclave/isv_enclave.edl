@@ -31,43 +31,52 @@
 
 enclave {
     from "sgx_tkey_exchange.edl" import *;
+    from "sgx_tstdc.edl" import *;
 
     include "sgx_key_exchange.h"
     include "sgx_trts.h"
 
     trusted {
         public sgx_status_t enclave_init_ra(int b_pse,
-                                            [out] sgx_ra_context_t *p_context);
-        public sgx_status_t enclave_ra_close(sgx_ra_context_t context);
+                                            [out] sgx_ra_context_t *p_context)
+                                            transition_using_threads;
+        public sgx_status_t enclave_ra_close(sgx_ra_context_t context)
+                                            transition_using_threads;
         public sgx_status_t verify_att_result_mac(sgx_ra_context_t context,
                                                   [in,size=message_size] uint8_t* message, 
                                                   size_t message_size, 
                                                   [in,size=mac_size] uint8_t* mac, 
-                                                  size_t mac_size);
+                                                  size_t mac_size)
+                                                  transition_using_threads;
         public sgx_status_t put_secret_data(sgx_ra_context_t context,  
                                             [in,size=secret_size] uint8_t* p_secret,
                                             uint32_t secret_size,
-                                            [in,count=16] uint8_t* gcm_mac);
+                                            [in,count=16] uint8_t* gcm_mac)
+                                            transition_using_threads;
         public sgx_status_t enclave_key_out(sgx_ra_context_t context, 
-                                            [out,size=len]uint8_t *buf, uint32_t len);
+                                            [out,size=len]uint8_t *buf, uint32_t len) 
+                                            transition_using_threads;
         public sgx_status_t encrypt_data(sgx_ra_context_t context, 
                                             [in,size=secret_size] uint8_t* p_secret,
                                             uint32_t secret_size,
                                             [out,count=secret_size] uint8_t* p_encrypt_secret,
-                                            [out,count=16] uint8_t* gcm_mac);
+                                            [out,count=16] uint8_t* gcm_mac) 
+                                            transition_using_threads;
         public sgx_status_t decrypt_data(sgx_ra_context_t context, 
                                             [in,size=secret_size] uint8_t* p_secret,
                                             uint32_t secret_size,
                                             [out,count=secret_size] uint8_t* p_decrypted_secret,
-                                            [in,count=16] uint8_t* gcm_mac);
+                                            [in,count=16] uint8_t* gcm_mac) 
+                                            transition_using_threads;
         public sgx_status_t mac_data(sgx_ra_context_t context, 
                                             [in,size=secret_size] uint8_t* p_secret,
                                             uint32_t secret_size,
-                                            [out,count=16] uint8_t* gcm_mac);
+                                            [out,count=16] uint8_t* gcm_mac) 
+                                            transition_using_threads;
     };
 
     untrusted {
-        void ocall_print([in, string]const char* str);
+        void ocall_print([in, string]const char* str) transition_using_threads;
     };
 
 };

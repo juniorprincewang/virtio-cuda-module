@@ -6,8 +6,11 @@
 #define TIMING 
 #define KMALLOC_SHIFT 13
 #define KMALLOC_SIZE (1UL<<KMALLOC_SHIFT)
-#define VIRTIO_MAC
-#define VIRTIO_ENC
+// #define ENABLE_SGX
+#ifdef ENABLE_SGX
+	#define ENABLE_MAC
+	// #define ENABLE_ENC
+#endif
 // #define VIRTIO_LOCK
 #define VIRTIO_LOCK_USER
 

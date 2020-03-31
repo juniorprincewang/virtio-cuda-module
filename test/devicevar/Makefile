@@ -1,6 +1,3 @@
-HOST 	= 10.10.81.192
-USER	= max
-ROUTINES= /home/max/vgpu/vm
 TARGET	= run
 NVCC	= nvcc -arch sm_35 --cudart=shared
 LIBS	= -lcudart
@@ -15,8 +12,9 @@ clean:
 	rm -f ./run
 	rm -f *.fatbin
 
-scp: fat
-	scp ./run.fatbin $(USER)@$(HOST):$(ROUTINES)
 
 fat:
 	nvcc cudaMemcpyToSymbol.cu --cudart=shared --fatbin -o run.fatbin
+
+cubin:
+	$(NVCC) cudaMemcpyToSymbol.cu --cubin -o run.cubin
