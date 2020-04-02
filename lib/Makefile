@@ -31,7 +31,7 @@
 
 ######## SGX SDK Settings ########
 
-SGX_SDK ?= /home/maxwell/linux-sgx/linux/installer/bin/sgxsdk/
+SGX_SDK ?= /opt/intel/sgxsdk/
 SGX_MODE ?= HW
 SGX_ARCH ?= x64
 SGX_DEBUG ?= 1
@@ -221,12 +221,6 @@ endif
 	@rm -f .config_* $(App_Name) $(App_Name) $(Enclave_Name) $(Signed_Enclave_Name) $(App_Cpp_Objects) isv_app/isv_enclave_u.* $(Enclave_Cpp_Objects) isv_enclave/isv_enclave_t.* 
 	@touch .config_$(Build_Mode)_$(SGX_ARCH)
 
-install: all 
-	@sudo -u root cp $(App_Name) /usr/local/cuda/lib64/
-	@sudo -u root cp $(Signed_Enclave_Name) $(ENCLAVE_PATH)
-	@sudo -u root rm $(ENCLAVE_PATH)/libcudart.so.9.1 $(ENCLAVE_PATH)/libcudart.so
-	@sudo -u root ln -s $(ENCLAVE_PATH)/$(App_Name) $(ENCLAVE_PATH)/libcudart.so.9.1
-	@sudo -u root ln -s $(ENCLAVE_PATH)/libcudart.so.9.1 $(ENCLAVE_PATH)/libcudart.so
 
 ######## App Objects ########
 
@@ -276,3 +270,12 @@ $(Signed_Enclave_Name): $(Enclave_Name)
 
 clean:
 	@rm -f .config_* $(App_Name) $(App_Name) $(Enclave_Name) $(Signed_Enclave_Name) $(App_Cpp_Objects) isv_app/isv_enclave_u.* $(Enclave_Cpp_Objects) isv_enclave/isv_enclave_t.* 
+
+################################
+
+install: clean all 
+	@sudo -u root cp $(App_Name) /usr/local/cuda/lib64/
+	@sudo -u root cp $(Signed_Enclave_Name) $(ENCLAVE_PATH)
+	@sudo -u root rm $(ENCLAVE_PATH)/libcudart.so.9.1 $(ENCLAVE_PATH)/libcudart.so
+	@sudo -u root ln -s $(ENCLAVE_PATH)/$(App_Name) $(ENCLAVE_PATH)/libcudart.so.9.1
+	@sudo -u root ln -s $(ENCLAVE_PATH)/libcudart.so.9.1 $(ENCLAVE_PATH)/libcudart.so

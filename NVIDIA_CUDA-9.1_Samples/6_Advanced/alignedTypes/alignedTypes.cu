@@ -271,15 +271,15 @@ int main(int argc, char **argv)
     int   MemorySize = (int)(MEM_SIZE/scale_factor) & 0xffffff00; // force multiple of 256 bytes
 
     printf("> Compute scaling value = %4.2f\n", scale_factor);
-    printf("> Memory Size = %d\n", MemorySize);
+    printf("> Memory Size = 0x%x\n", MemorySize);
 
     sdkCreateTimer(&hTimer);
 
-    printf("Allocating memory...\n");
-    // h_idataCPU = (unsigned char *)malloc(MemorySize);
-    // h_odataGPU = (unsigned char *)malloc(MemorySize);
-    h_idataCPU = (unsigned char *)my_malloc(MemorySize);
-    h_odataGPU = (unsigned char *)my_malloc(MemorySize);
+    printf("Allocating memory %x...\n", MemorySize);
+    h_idataCPU = (unsigned char *)malloc(MemorySize);
+    h_odataGPU = (unsigned char *)malloc(MemorySize);
+    // h_idataCPU = (unsigned char *)my_malloc(MemorySize);
+    // h_odataGPU = (unsigned char *)my_malloc(MemorySize);
     checkCudaErrors(cudaMalloc((void **)&d_idata, MemorySize));
     checkCudaErrors(cudaMalloc((void **)&d_odata, MemorySize));
 
@@ -336,10 +336,10 @@ int main(int argc, char **argv)
     printf("Shutting down...\n");
     checkCudaErrors(cudaFree(d_idata));
     checkCudaErrors(cudaFree(d_odata));
-    // free(h_odataGPU);
-    // free(h_idataCPU);
-    my_free(h_odataGPU);
-    my_free(h_idataCPU);
+    free(h_odataGPU);
+    free(h_idataCPU);
+    // my_free(h_odataGPU);
+    // my_free(h_idataCPU);
 
     sdkDeleteTimer(&hTimer);
 

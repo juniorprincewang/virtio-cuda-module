@@ -9,7 +9,7 @@
 // #define ENABLE_SGX
 #ifdef ENABLE_SGX
 	#define ENABLE_MAC
-	// #define ENABLE_ENC
+	#define ENABLE_ENC
 #endif
 // #define VIRTIO_LOCK
 #define VIRTIO_LOCK_USER

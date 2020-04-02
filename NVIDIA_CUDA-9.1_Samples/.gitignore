@@ -16,3 +16,4 @@
 ./6_Advanced/alignedTypes/alignedTypes
 ./7_CUDALibraries/simpleCUBLAS/simpleCUBLAS
 bin
+benchmark_results

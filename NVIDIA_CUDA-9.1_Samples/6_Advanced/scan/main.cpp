@@ -29,14 +29,14 @@ int main(int argc, char **argv)
     StopWatchInterface  *hTimer = NULL;
     const uint N = 13 * 1048576 / 2;
 
-    printf("Allocating and initializing host arrays...\n");
+    printf("Allocating and initializing host arrays, size 0x%lx\n", N*sizeof(uint));
     sdkCreateTimer(&hTimer);
-    // h_Input     = (uint *)malloc(N * sizeof(uint));
-    // h_OutputCPU = (uint *)malloc(N * sizeof(uint));
-    // h_OutputGPU = (uint *)malloc(N * sizeof(uint));
-    h_Input     = (uint *)my_malloc(N * sizeof(uint));
-    h_OutputCPU = (uint *)my_malloc(N * sizeof(uint));
-    h_OutputGPU = (uint *)my_malloc(N * sizeof(uint));
+    h_Input     = (uint *)malloc(N * sizeof(uint));
+    h_OutputCPU = (uint *)malloc(N * sizeof(uint));
+    h_OutputGPU = (uint *)malloc(N * sizeof(uint));
+    //cudaMallocHost(&h_Input, N * sizeof(uint));
+    //cudaMallocHost(&h_OutputCPU, N * sizeof(uint));
+    //cudaMallocHost(&h_OutputGPU, N * sizeof(uint));
     srand(2009);
 
     for (uint i = 0; i < N; i++)
@@ -164,12 +164,12 @@ int main(int argc, char **argv)
     closeScan();
     checkCudaErrors(cudaFree(d_Output));
     checkCudaErrors(cudaFree(d_Input));
-    // free(h_Input);
-    // free(h_OutputCPU);
-    // free(h_OutputGPU);
-    my_free(h_Input);
-    my_free(h_OutputCPU);
-    my_free(h_OutputGPU);
+    free(h_Input);
+    free(h_OutputCPU);
+    free(h_OutputGPU);
+    // cudaFreeHost(h_Input);
+    // cudaFree(h_OutputCPU);
+    // cudaFreeHost(h_OutputGPU);
     sdkDeleteTimer(&hTimer);
 
     // pass or fail (cumulative... all tests in the loop)

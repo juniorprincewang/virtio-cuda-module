@@ -199,7 +199,7 @@ int main(int argc, char **argv)
 
     // allocate generic memory and pin it laster instead of using cudaHostAlloc()
 
-    bool bPinGenericMemory  = DEFAULT_PINNED_GENERIC_MEMORY; // we want this to be the default behavior
+    bool bPinGenericMemory  =  false ; //DEFAULT_PINNED_GENERIC_MEMORY; // we want this to be the default behavior
     int  device_sync_method = cudaDeviceBlockingSync; // by default we use BlockingSync
 
     int niterations;    // number of iterations for the loop inside the kernel
