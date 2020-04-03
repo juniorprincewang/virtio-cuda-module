@@ -77,7 +77,7 @@ for bs in ${bm[*]}; do
 done
 
 b_idx=0
-for b in ${bm[*]}; do
+for bs in ${bm[*]}; do
     b=${bs##*/}
     echo "${b}: Average ${time_array[$b_idx]} ms per run"
     b_idx=$((b_idx+1))
