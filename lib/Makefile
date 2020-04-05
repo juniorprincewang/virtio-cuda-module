@@ -35,7 +35,12 @@ SGX_SDK ?= /opt/intel/sgxsdk/
 SGX_MODE ?= HW
 SGX_ARCH ?= x64
 SGX_DEBUG ?= 1
-ENCLAVE_PATH = /usr/local/cuda/lib64/
+CUDA_LIB_PATH = /usr/local/cuda/lib64
+ENCLAVE_PATH = $(CUDA_LIB_PATH)
+CUDA_MAJOR = 9
+CUDA_MINOR = 1
+CUDA_PATHCHLEVEL = 0
+
 
 ifeq ($(shell getconf LONG_BIT), 32)
 	SGX_ARCH := x86
@@ -105,7 +110,7 @@ endif
 
 App_Cpp_Flags := $(App_C_Flags)
 App_Link_Flags := -shared -L$(SGX_LIBRARY_PATH) -l$(Urts_Library_Name) -L. -lsgx_ukey_exchange -lpthread -ldl -Wl,-rpath=$(CURDIR)
-App_Link_Flags += -Wl,-soname,libcudart.so.9.1 
+App_Link_Flags += -Wl,-soname,libcudart.so.$(CUDA_MAJOR).$(CUDA_MINOR) 
 
 ifneq ($(SGX_MODE), HW)
 	App_Link_Flags += -lsgx_uae_service_sim
@@ -115,7 +120,7 @@ endif
 
 App_Cpp_Objects := $(App_Cpp_Files:.cpp=.o)
 
-App_Name := libcudart.so.9.1.0
+App_Name := libcudart.so.$(CUDA_MAJOR).$(CUDA_MINOR).$(CUDA_PATHCHLEVEL)
 
 ######## Enclave Settings ########
 
@@ -273,9 +278,22 @@ clean:
 
 ################################
 
+VERSION := $(shell cat /usr/local/cuda/version.txt | head -n1 | cut -d " " -f3)
+MAJOR := $(shell echo ${VERSION} | cut -d . -f 1)
+MINOR := $(shell echo ${VERSION} | cut -d . -f 2)
+CUDA_LIB_LINK := $(CUDA_LIB_PATH)/libcudart.so
+CUDA_LIB := $(CUDA_LIB_PATH)/libcudart.so.$(VERSION)
+CUDA_LIB_MID := $(CUDA_LIB_PATH)/libcudart.so.$(MAJOR).$(MINOR)
+exist = $(shell if [ -f $(CUDA_LIB) ]; then echo "yes"; else echo "no"; fi;)
+exist = $(shell if [ -f $(CUDA_LIB_MID) ]; then echo "yes"; else echo "no"; fi;)
+
+
 install: clean all 
-	@sudo -u root cp $(App_Name) /usr/local/cuda/lib64/
+# 	@echo $(exist)
+	@sudo -u root cp $(App_Name) $(CUDA_LIB_PATH)
 	@sudo -u root cp $(Signed_Enclave_Name) $(ENCLAVE_PATH)
-	@sudo -u root rm $(ENCLAVE_PATH)/libcudart.so.9.1 $(ENCLAVE_PATH)/libcudart.so
-	@sudo -u root ln -s $(ENCLAVE_PATH)/$(App_Name) $(ENCLAVE_PATH)/libcudart.so.9.1
-	@sudo -u root ln -s $(ENCLAVE_PATH)/libcudart.so.9.1 $(ENCLAVE_PATH)/libcudart.so
+	@echo $(CUDA_LIB)
+	@echo $(CUDA_LIB_MID)
+	@sudo -u root rm $(CUDA_LIB_MID) $(CUDA_LIB_LINK)
+	@sudo -u root ln -s $(CUDA_LIB_PATH)/$(App_Name) $(CUDA_LIB_PATH)/libcudart.so.$(CUDA_MAJOR).$(CUDA_MINOR)
+	@sudo -u root ln -s $(CUDA_LIB_PATH)/libcudart.so.$(CUDA_MAJOR).$(CUDA_MINOR) $(CUDA_LIB_LINK)

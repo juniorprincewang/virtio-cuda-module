@@ -24,22 +24,16 @@
 #include <stdbool.h>
 #include <malloc.h>
 #include <sys/time.h>
-
 #include <limits.h>
 // Needed for definition of remote attestation messages.
 #include "remote_attestation_result.h"
-
 #include "isv_enclave_u.h"
-
 // Needed to call untrusted key exchange library APIs, i.e. sgx_ra_proc_msg2.
 #include "sgx_ukey_exchange.h"
-
 // Needed to create enclave and do ecall.
 #include "sgx_urts.h"
-
 // Needed to query extended epid group id.
 #include "sgx_uae_service.h"
-
 #include <sgx_uswitchless.h>
 
 
@@ -52,19 +46,33 @@ static char enclave_path[256];
 
 
 static int global_init = 0;
-
+// accumulate api number in different types
+static int cuda_api_count[API_TYPE_SIZE] = {0};
+// accumulate memory size in 5 types
+/*
+0   host 2 host
+1   host 2 device
+2   device 2 host
+3   device 2 device
+4   default
+*/
+static long accum_memcpy_size[5]={0};
 #define DEVICE_FILE "/dev/cudaport2p%d"
 
 // #define VIRTIO_CUDA_DEBUG
 
 #ifdef VIRTIO_CUDA_DEBUG
-    #define debug(fmt, arg...) printf("[DEBUG]: " fmt, ##arg)
-    #define func() printf("[FUNC] PID %ld Now in %s\n", syscall(SYS_gettid), __FUNCTION__);
-    #define debug_clean(fmt, arg...) printf("" fmt, ##arg)
+    #define debug(fmt, arg...) do{printf("[DEBUG]: " fmt, ##arg);} while(0)
+    #define func() do { printf("[FUNC] PID %ld Now in %s\n", syscall(SYS_gettid), __FUNCTION__);} while(0)
+    #define debug_clean(fmt, arg...) do{printf("" fmt, ##arg);}while(0)
+    #define api_inc(n) do {cuda_api_count[n]++; } while(0)
+    #define mem_inc(n, size) do {accum_memcpy_size[n]+=size; } while(0)
 #else
     #define debug(fmt, arg...) 
     #define func() 
     #define debug_clean(fmt, arg...)  
+    #define api_inc(n) 
+    #define mem_inc(n, size) 
 #endif
 
 #define error(fmt, arg...) printf("[ERROR]: %s->line : %d. " fmt, __FUNCTION__, __LINE__, ##arg)
@@ -452,13 +460,54 @@ void my_library_init(void) {
     #endif
 }
 
-void my_library_fini(void) {
+static void count_cuda_api(void)
+{
+    int cnt = 0;
+    printf("API count:\n");
+    for(int i=0; i<API_TYPE_SIZE; i++) {
+        cnt += cuda_api_count[i];
+        printf(" %d : %d \n", i, cuda_api_count[i]);
+    }
+    printf("total #api is %d\n", cnt);
+}
+
+static void format_size(long size)
+{
+    long n=size;
+    if(n>>30) {
+        printf(" %d GB\n", n>>30);
+        return;
+    } else if(n>>20) {
+        printf(" %d MB\n", n>>20);
+        return;
+    } else if(n>>10) {
+        printf(" %d KB\n", n>>10);
+        return;
+    } else {
+        printf(" %d B\n",  n);
+        return;
+    }
+}
+
+static void count_memcpy_size(void)
+{
+    printf("accumulate memcpy size:\n");
+    for(int i=0; i<5; i++) {
+        printf(" %d : 0x%lx(%d) \t", i, accum_memcpy_size[i], accum_memcpy_size[i]);
+        format_size(accum_memcpy_size[i]);
+    }
+}
+
+void my_library_fini(void)
+{
     debug("deinit dynamic library\n");
     __libc_free(p_binary);
 #ifdef ENABLE_SGX
     fini_sgx_ecdh(sgx_env);
 #endif
     close_vdevice();
+    count_cuda_api();
+    count_memcpy_size();
 }
 
 static void get_mac(uint8_t *data, uint32_t size, uint8_t *payload_tag)
@@ -928,6 +977,7 @@ extern "C" cudaError_t cudaLaunch(const void *entry)
     VirtIOArg arg;
     unsigned char *para;
     func();
+    api_inc(API_KERNEL);
     init_primary_context();
     if(!entry)
         return cudaSuccess;
@@ -966,6 +1016,7 @@ extern "C" cudaError_t cudaMemcpy(void *dst, const void *src, size_t count, enum
 {
     VirtIOArg arg;
     func();
+    api_inc(API_MEMCPY);
     init_primary_context();
     if (kind <0 || kind >4) {
         return cudaErrorInvalidMemcpyDirection;
@@ -973,6 +1024,7 @@ extern "C" cudaError_t cudaMemcpy(void *dst, const void *src, size_t count, enum
     debug("cudaMemcpyKind %d\n", kind);
     if(!dst || !src || count<=0)
         return cudaSuccess;
+    mem_inc(kind, count);
     memset(&arg, 0, sizeof(VirtIOArg));
     arg.cmd     = VIRTIO_CUDA_MEMCPY;
     arg.flag    = kind;
@@ -995,6 +1047,7 @@ extern "C" cudaError_t cudaMemcpyToSymbol( const void *symbol, const void *src,
 {
     VirtIOArg arg;
     func();
+    api_inc(API_MEMCPY);
     init_primary_context();
     if(!symbol || !src || count<=0)
         return cudaSuccess;
@@ -1018,6 +1071,7 @@ extern "C" cudaError_t cudaMemcpyFromSymbol(   void *dst, const void *symbol,
 {
     VirtIOArg arg;
     func();
+    api_inc(API_MEMCPY);
     init_primary_context();
     if(!dst || !symbol || count<=0)
         return cudaSuccess;
@@ -1039,6 +1093,7 @@ extern "C" cudaError_t cudaMemset(void *dst, int value, size_t count)
 {
     VirtIOArg arg;
     func();
+    api_inc(API_MEM);
     init_primary_context();
     if(!dst || count<=0)
         return cudaSuccess;
@@ -1062,12 +1117,14 @@ extern "C" cudaError_t cudaMemcpyAsync(
 {
     VirtIOArg arg;
     func();
+    api_inc(API_MEMCPY);
     if (kind <0 || kind >4) {
         debug("direction is %d\n", kind);
         return cudaErrorInvalidMemcpyDirection;
     }
     if(!dst || !src || count<=0)
         return cudaSuccess;
+    mem_inc(kind, count);
     init_primary_context();
     memset(&arg, 0, sizeof(VirtIOArg));
     arg.cmd     = VIRTIO_CUDA_MEMCPY_ASYNC;
@@ -1090,6 +1147,7 @@ extern "C" cudaError_t cudaMalloc(void **devPtr, size_t size)
 {
     VirtIOArg arg;
     func();
+    api_inc(API_MEM);
     init_primary_context();
     memset(&arg, 0, sizeof(VirtIOArg));
     arg.cmd     = VIRTIO_CUDA_MALLOC;
@@ -1106,6 +1164,7 @@ extern "C" cudaError_t cudaHostRegister(void *ptr, size_t size, unsigned int fla
 {
     VirtIOArg arg;
     func();
+    api_inc(API_MEM);
     if(size<=0)
         return cudaSuccess;
     init_primary_context();
@@ -1123,6 +1182,7 @@ extern "C" cudaError_t cudaHostUnregister(void *ptr)
 {
     VirtIOArg arg;
     func();
+    api_inc(API_MEM);
     if(!ptr)
         return cudaSuccess;
     init_primary_context();
@@ -1137,6 +1197,7 @@ extern "C" cudaError_t cudaHostUnregister(void *ptr)
 extern "C" cudaError_t cudaHostAlloc(void **pHost, size_t size, unsigned int flags)
 {
     func();
+    api_inc(API_MEM);
     init_primary_context();
     if(size <=0)
         return cudaSuccess;
@@ -1148,6 +1209,7 @@ extern "C" cudaError_t cudaHostAlloc(void **pHost, size_t size, unsigned int fla
 extern "C" cudaError_t cudaMallocHost(void **ptr, size_t size)
 {
     func();
+    api_inc(API_MEM);
     debug("allocating size 0x%lx\n", size);
     return cudaHostAlloc(ptr, size, cudaHostAllocDefault);
 }
@@ -1156,6 +1218,7 @@ extern "C" cudaError_t cudaFreeHost(void *ptr)
 {
     BlockHeader* blk = NULL;
     func();
+    api_inc(API_MEM);
     init_primary_context();
     if(!ptr)
         return cudaSuccess;
@@ -1176,6 +1239,7 @@ extern "C" cudaError_t cudaFree(void *devPtr)
 {
     VirtIOArg arg;
     func();
+    api_inc(API_MEM);
     init_primary_context();
     if(!devPtr)
         return cudaSuccess;
@@ -1195,6 +1259,7 @@ extern "C" cudaError_t cudaGetDevice(int *device)
 {
     VirtIOArg arg;
     func();
+    api_inc(API_DEVICE);
     memset(&arg, 0, sizeof(VirtIOArg));
     arg.cmd     = VIRTIO_CUDA_GETDEVICE;
     arg.tid     = (uint32_t)syscall(SYS_gettid);
@@ -1207,6 +1272,7 @@ extern "C" cudaError_t cudaGetDeviceProperties(struct cudaDeviceProp *prop, int 
 {
     VirtIOArg arg;
     func();
+    api_inc(API_DEVICE);
     memset(&arg, 0, sizeof(VirtIOArg));
     arg.cmd     = VIRTIO_CUDA_GETDEVICEPROPERTIES;
     arg.dst     = (uint64_t)prop;
@@ -1223,6 +1289,7 @@ extern "C" cudaError_t cudaSetDevice(int device)
 {
     VirtIOArg arg;
     func();
+    api_inc(API_DEVICE);
     memset(&arg, 0, sizeof(VirtIOArg));
     arg.cmd     = VIRTIO_CUDA_SETDEVICE;
     arg.flag    = device;
@@ -1236,6 +1303,7 @@ extern "C" cudaError_t cudaGetDeviceCount(int *count)
 {
     VirtIOArg arg;
     func();
+    api_inc(API_DEVICE);
     memset(&arg, 0, sizeof(VirtIOArg));
     arg.cmd = VIRTIO_CUDA_GETDEVICECOUNT;
     arg.tid = (uint32_t)syscall(SYS_gettid);
@@ -1248,6 +1316,7 @@ extern "C" cudaError_t cudaDeviceSetCacheConfig(enum cudaFuncCache cacheConfig)
 {
     VirtIOArg arg;
     func();
+    api_inc(API_DEVICE);
     memset(&arg, 0, sizeof(VirtIOArg));
     arg.cmd = VIRTIO_CUDA_DEVICESETCACHECONFIG;
     arg.tid = (uint32_t)syscall(SYS_gettid);
@@ -1260,6 +1329,7 @@ extern "C" cudaError_t cudaDeviceReset(void)
 {
     VirtIOArg arg;
     func();
+    api_inc(API_DEVICE);
     memset(&arg, 0, sizeof(VirtIOArg));
     arg.cmd = VIRTIO_CUDA_DEVICERESET;
     arg.tid = (uint32_t)syscall(SYS_gettid);
@@ -1271,6 +1341,7 @@ extern "C" cudaError_t cudaDeviceSynchronize(void)
 {
     VirtIOArg arg;
     func();
+    api_inc(API_DEVICE);
     memset(&arg, 0, sizeof(VirtIOArg));
     arg.cmd = VIRTIO_CUDA_DEVICESYNCHRONIZE;
     arg.tid = (uint32_t)syscall(SYS_gettid);
@@ -1282,6 +1353,7 @@ extern "C" cudaError_t cudaSetDeviceFlags(unsigned int flags)
 {
     VirtIOArg arg;
     func();
+    api_inc(API_DEVICE);
     memset(&arg, 0, sizeof(VirtIOArg));
     arg.cmd     = VIRTIO_CUDA_SETDEVICEFLAGS;
     arg.tid     = (uint32_t)syscall(SYS_gettid);
@@ -1296,6 +1368,7 @@ extern "C" cudaError_t cudaStreamCreate(cudaStream_t *pStream)
 {
     VirtIOArg arg;
     func();
+    api_inc(API_STREAM);
     init_primary_context();
     memset(&arg, 0, sizeof(VirtIOArg));
     arg.cmd = VIRTIO_CUDA_STREAMCREATE;
@@ -1310,6 +1383,7 @@ extern "C" cudaError_t cudaStreamCreateWithFlags(cudaStream_t *pStream, unsigned
 {
     VirtIOArg arg;
     func();
+    api_inc(API_STREAM);
     init_primary_context();
     memset(&arg, 0, sizeof(VirtIOArg));
     arg.cmd     = VIRTIO_CUDA_STREAMCREATEWITHFLAGS;
@@ -1325,6 +1399,7 @@ extern "C" cudaError_t cudaStreamDestroy(cudaStream_t stream)
 {
     VirtIOArg arg;
     func();
+    api_inc(API_STREAM);
     init_primary_context();
     debug("stream = 0x%lx\n", (uint64_t)stream);
     if(stream==0)
@@ -1341,6 +1416,7 @@ extern "C" cudaError_t cudaStreamSynchronize(cudaStream_t stream)
 {
     VirtIOArg arg;
     func();
+    api_inc(API_STREAM);
     init_primary_context();
     memset(&arg, 0, sizeof(VirtIOArg));
     arg.cmd     = VIRTIO_CUDA_STREAMSYNCHRONIZE;
@@ -1355,6 +1431,7 @@ extern "C" cudaError_t cudaStreamWaitEvent(cudaStream_t stream,
 {
     VirtIOArg arg;
     func();
+    api_inc(API_STREAM);
     init_primary_context();
     if(event == 0)
         return cudaSuccess;
@@ -1372,6 +1449,7 @@ extern "C" cudaError_t cudaEventCreate(cudaEvent_t *event)
 {
     VirtIOArg arg;
     func();
+    api_inc(API_EVENT);
     init_primary_context();
     memset(&arg, 0, sizeof(VirtIOArg));
     arg.cmd = VIRTIO_CUDA_EVENTCREATE;
@@ -1386,6 +1464,7 @@ extern "C" cudaError_t cudaEventCreateWithFlags(cudaEvent_t *event, unsigned int
 {
     VirtIOArg arg;
     func();
+    api_inc(API_EVENT);
     init_primary_context();
     memset(&arg, 0, sizeof(VirtIOArg));
     arg.cmd     = VIRTIO_CUDA_EVENTCREATEWITHFLAGS;
@@ -1401,6 +1480,7 @@ extern "C" cudaError_t cudaEventDestroy(cudaEvent_t event)
 {
     VirtIOArg arg;
     func();
+    api_inc(API_EVENT);
     init_primary_context();
     if (event == 0)
         return cudaSuccess;
@@ -1417,6 +1497,7 @@ extern "C" cudaError_t cudaEventRecord(cudaEvent_t event, cudaStream_t stream)
 {
     VirtIOArg arg;
     func();
+    api_inc(API_EVENT);
     init_primary_context();
     debug("event is 0x%lx\n", (uint64_t)event);
     if(event==0)
@@ -1436,6 +1517,7 @@ extern "C" cudaError_t cudaEventSynchronize(cudaEvent_t event)
 {
     VirtIOArg arg;
     func();
+    api_inc(API_EVENT);
     init_primary_context();
     if(event==0)
         return cudaSuccess;
@@ -1451,6 +1533,7 @@ extern "C" cudaError_t cudaEventQuery(cudaEvent_t event)
 {
     VirtIOArg arg;
     func();
+    api_inc(API_EVENT);
     init_primary_context();
     if(event==0)
         return cudaSuccess;
@@ -1466,6 +1549,7 @@ extern "C" cudaError_t cudaEventElapsedTime(float *ms, cudaEvent_t start, cudaEv
 {
     VirtIOArg arg;
     func();
+    api_inc(API_EVENT);
     init_primary_context();
     if(start==0 || end==0)
         return cudaSuccess;
@@ -1485,6 +1569,7 @@ extern "C" cudaError_t cudaThreadSynchronize()
 {
     VirtIOArg arg;
     func();
+    api_inc(API_THREAD);
     init_primary_context();
     memset(&arg, 0, sizeof(VirtIOArg));
     arg.cmd = VIRTIO_CUDA_THREADSYNCHRONIZE;
@@ -1497,6 +1582,7 @@ extern "C" cudaError_t cudaGetLastError(void)
 {
     VirtIOArg arg;
     func();
+    api_inc(API_ERROR);
     init_primary_context();
     memset(&arg, 0, sizeof(VirtIOArg));
     arg.cmd = VIRTIO_CUDA_GETLASTERROR;
@@ -1509,6 +1595,7 @@ extern "C" cudaError_t cudaPeekAtLastError(void)
 {
     VirtIOArg arg;
     func();
+    api_inc(API_ERROR);
     init_primary_context();
     memset(&arg, 0, sizeof(VirtIOArg));
     arg.cmd = VIRTIO_CUDA_PEEKATLASTERROR;
@@ -1521,6 +1608,7 @@ extern "C" cudaError_t cudaMemGetInfo(size_t *free, size_t *total)
 {
     VirtIOArg arg;
     func();
+    api_inc(API_MEM);
     init_primary_context();
     memset(&arg, 0, sizeof(VirtIOArg));
     arg.cmd = VIRTIO_CUDA_MEMGETINFO;

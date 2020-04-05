@@ -6,6 +6,20 @@
 #define TIMING 
 #define KMALLOC_SHIFT 13
 #define KMALLOC_SIZE (1UL<<KMALLOC_SHIFT)
+
+enum API_TYPE{
+    API_OTHER,     // 0
+    API_KERNEL,    // 1
+    API_MEMCPY,    // 2
+    API_EVENT,    // 3
+    API_STREAM,    // 4
+ 	API_MEM,    // 5
+ 	API_DEVICE,    // 6
+ 	API_THREAD,    // 7
+ 	API_ERROR,    // 8
+	API_TYPE_SIZE
+};
+
 // #define ENABLE_SGX
 #ifdef ENABLE_SGX
 	#define ENABLE_MAC
