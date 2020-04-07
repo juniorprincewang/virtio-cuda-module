@@ -35,31 +35,15 @@
 // Needed to query extended epid group id.
 #include "sgx_uae_service.h"
 #include <sgx_uswitchless.h>
-
+#include "../utils/cudump.h"
 
 #ifndef SAFE_FREE
 #define SAFE_FREE(ptr) {if (NULL != (ptr)) {free(ptr); (ptr) = NULL;}}
 #endif
 
 static char enclave_path[256];
-#define ENCLAVE_PATH "/usr/local/cuda/lib64/isv_enclave.signed.so"
-
-
-static int global_init = 0;
-// accumulate api number in different types
-static int cuda_api_count[API_TYPE_SIZE] = {0};
-// accumulate memory size in 5 types
-/*
-0   host 2 host
-1   host 2 device
-2   device 2 host
-3   device 2 device
-4   default
-*/
-static long accum_memcpy_size[5]={0};
-#define DEVICE_FILE "/dev/cudaport2p%d"
-
-// #define VIRTIO_CUDA_DEBUG
+#define ENCLAVE_PATH    "/usr/local/cuda/lib64/isv_enclave.signed.so"
+#define DEVICE_FILE     "/dev/cudaport2p%d"
 
 #ifdef VIRTIO_CUDA_DEBUG
     #define debug(fmt, arg...) do{printf("[DEBUG]: " fmt, ##arg);} while(0)
@@ -82,18 +66,39 @@ static long accum_memcpy_size[5]={0};
 #define ARG_LEN sizeof(VirtIOArg)
 #define DEVICE_COUNT 32
 
+/*
+* Global Variable
+*/
+
+static struct CUctx_st *ctx;
+// store single kernel configuration and params
+static struct CUkernel_st *kernel_param;
+static int global_init = 0;
+// accumulate api number in different types
+static int cuda_api_count[API_TYPE_SIZE] = {0};
+// accumulate memory size in 5 types
+/*
+0   host 2 host
+1   host 2 device
+2   device 2 host
+3   device 2 device
+4   default
+*/
+static long accum_memcpy_size[5]={0};
+
+
+
 typedef struct KernelConf
 {
     dim3 gridDim;
     dim3 blockDim;
     size_t sharedMem;
-    cudaStream_t stream;
+    void * stream;
 } KernelConf_t ;
 
 static uint8_t cudaKernelPara[512]; // uint8_t === unsigned char
 static uint32_t cudaParaSize;       // uint32_t == unsigned int
 static KernelConf_t kernelConf;
-static int fd=-1;           // fd of device file
 static int device_count=0;  // virtual device number
 static int minor = 0;       // get current device
 
@@ -116,7 +121,7 @@ typedef struct sgx_ra_env
     sgx_enclave_id_t enclave_id;
 } SGX_RA_ENV;
 
-bool primary_context_initialized;
+
 typedef struct fatbin_buf
 {
     uint32_t block_size;
@@ -171,7 +176,7 @@ void send_to_device(int cmd, void *arg)
     #ifdef VIRTIO_LOCK_USER
     pthread_spin_lock(&lock);
     #endif
-    if(ioctl(fd, cmd, arg) == -1){
+    if(ioctl(ctx->fd, cmd, arg) == -1){
         error("ioctl when cmd is %d\n", _IOC_NR(cmd));
     }
     #ifdef VIRTIO_LOCK_USER
@@ -237,7 +242,7 @@ static void *__mmalloc(size_t size)
     size_t blocks_size = roundup(total_size, KMALLOC_SIZE);
 
     void *ptr = mmap(0, blocks_size, PROT_READ|PROT_WRITE, 
-                        MAP_SHARED, fd, map_offset);
+                        MAP_SHARED, ctx->fd, map_offset);
     if(ptr == MAP_FAILED) {
         error("mmap failed, error: %s.\n", strerror(errno));
         return NULL;
@@ -307,40 +312,6 @@ extern "C" void my_free(void *ptr)
     munmap((void*)blk->address, blk->total_size);
 }
 
-
-/*extern "C" void *malloc(size_t size)
-{
-    if (global_init==1) {
-        debug("malloc 0x%lx\n", size);
-        if (size > (KMALLOC_SIZE)<<2)
-            return __mmalloc(size);
-    }
-    return __libc_malloc(size);
-}
-
-extern "C" void free(void *ptr)
-{
-    if(global_init == 1) {
-        BlockHeader* blk = NULL;
-        // func();
-        if (ptr == NULL)
-            return;
-        blk = get_block_by_ptr(ptr);
-        if(!blk) {
-            __libc_free(ptr);
-            return;
-        }
-        debug("blk->address   =0x%lx\n",(uint64_t)blk->address);
-        debug("blk->total_size=0x%lx\n",(uint64_t)blk->total_size);
-        debug("magic 0x%lx\n", blk->magic);
-        munmapctl(ptr);
-        munmap((void*)blk->address, blk->total_size);
-        return;
-    }
-    return __libc_free(ptr);
-}
-*/
-
 int get_vdevice_count(int *result)
 {
     char fname[128]="/proc/virtio-cuda/virtual_device_count";
@@ -378,8 +349,8 @@ static int open_vdevice()
     debug("device_count=%d\n", device_count);
     for(i=1; i<=device_count; i++) {
         sprintf(devname, DEVICE_FILE, i);
-        fd = open(devname, MODE);
-        if(fd>= 0) {
+        ctx->fd = open(devname, MODE);
+        if(ctx->fd>= 0) {
             sprintf(enclave_path, ENCLAVE_PATH, i);
             break;
         }
@@ -396,17 +367,30 @@ static int open_vdevice()
         return -EINVAL;
     }
     minor = i;
-    debug("fd is %d\n", fd);
+    debug("fd is %d\n", ctx->fd);
     return 0;
 }
 
 static void close_vdevice()
 {
     func();
-    close(fd);
+    close(ctx->fd);
     debug("closing fd\n");
 }
 
+static void ctx_new()
+{
+    ctx = (CUctx_st *)malloc(sizeof(*ctx));
+    ctx->fd = 0;
+    ctx->primary_context_initialized = 0;
+    ctx->nr_mod = 0;
+    ctx->head_mod = NULL;
+}
+
+static void ctx_del()
+{
+    free(ctx);
+}
 
 void my_library_init(void) {
     #ifdef  TIMING
@@ -418,7 +402,8 @@ void my_library_init(void) {
     #endif
     size_t page_size = sysconf(_SC_PAGESIZE);
     debug("Init dynamic library.\n");
-    global_init = 1;
+    ctx_new();
+
     map_offset=0;
     if(open_vdevice() < 0)
         exit(-1);
@@ -445,7 +430,6 @@ void my_library_init(void) {
         exit(-1);
     }
     debug("p_binary address %p\n", p_binary);
-    primary_context_initialized = false;
     p_binary->size = 0;
     p_binary->nr_binary = 0;
     p_binary->total_size = page_size<<5;
@@ -506,6 +490,7 @@ void my_library_fini(void)
     fini_sgx_ecdh(sgx_env);
 #endif
     close_vdevice();
+    ctx_del();
     count_cuda_api();
     count_memcpy_size();
 }
@@ -573,8 +558,8 @@ static void init_primary_context()
 #ifdef ENABLE_MAC
     uint8_t payload_tag[SAMPLE_SP_TAG_SIZE];
 #endif
-    if(!primary_context_initialized) {
-        primary_context_initialized = true;
+    if(!ctx->primary_context_initialized) {
+        ctx->primary_context_initialized = 1;
         memset(&arg, 0, ARG_LEN);
         debug("nr_binary %x\n", p_binary->nr_binary);
 #ifdef ENABLE_MAC
@@ -594,11 +579,56 @@ static void init_primary_context()
     }
 }
 
+static void dump_fatbin_to_file(char *fatbin, int size)
+{
+    int fd = open("/tmp/test.cubin", O_WRONLY| O_TRUNC | O_CREAT, 0666);
+    write(fd, (void*)fatbin, size);
+    close(fd);
+}
+
+static CUmod_st * mod_add(const char *cubin)
+{
+    CUmod_st *mod = (CUmod_st*)malloc(sizeof(*mod));
+    if(cuda_load_cubin(mod, cubin)) {
+        error("Failed to load cubin\n");
+        return NULL;
+    }
+    mod->next = ctx->head_mod;
+    ctx->head_mod = mod;
+    ctx->nr_mod++;
+    return mod;
+}
+
+static void mod_remove(const char *cubin)
+{
+
+}
+
+static void mod_clear()
+{
+    CUmod_st *mod=NULL;
+    while (ctx->head_mod) {
+        mod = ctx->head_mod->next;
+        ctx->head_mod = ctx->head_mod->next;
+        free(mod);
+    }
+}
+
+static void dump_cuda_symbol(struct CUmod_st *mod)
+{
+    dump_symbol(mod);
+}
+
+static void dump_cuda_kernel(struct CUmod_st *mod)
+{
+    dump_kernel(mod);
+}
+
 extern "C" void** __cudaRegisterFatBinary(void *fatCubin)
 {
     VirtIOArg arg;
     unsigned int magic;
-    unsigned long long **fatCubinHandle;
+    void **fatCubinHandle;
     uint32_t size;
     struct fatBinaryHeader *fatHeader;
 #ifdef ENABLE_MAC
@@ -606,7 +636,6 @@ extern "C" void** __cudaRegisterFatBinary(void *fatCubin)
 #endif
  
     func();
-    fatCubinHandle = (unsigned long long**)__libc_malloc(sizeof(unsigned long long*));
     magic = *(unsigned int*)fatCubin;
     if (magic == FATBINC_MAGIC)
     {
@@ -616,13 +645,21 @@ extern "C" void** __cudaRegisterFatBinary(void *fatCubin)
         debug("version  =   0x%x\n", binary->version);
         debug("data =   %p\n", binary->data);
         debug("filename_or_fatbins  =   %p\n", binary->filename_or_fatbins);
-        *fatCubinHandle = (unsigned long long*)binary->data;
+        fatCubinHandle = (void **)&binary->data;
         fatHeader = (struct fatBinaryHeader*)binary->data;
         debug("FatBinHeader = %p\n", fatHeader);
         debug("magic    =   0x%x\n", fatHeader->magic);
         debug("version  =   0x%x\n", fatHeader->version);
         debug("headerSize = %d(0x%x)\n", fatHeader->headerSize, fatHeader->headerSize);
         debug("fatSize  =   %lld(0x%llx)\n", fatHeader->fatSize, fatHeader->fatSize);
+        // dump_fatbin_to_file((char *)binary->data, fatHeader->headerSize + fatHeader->fatSize);
+        // Note that fatcubin includes meta header and cubin data
+        // meta header occupies first 0x50 bytes.
+        CUmod_st *mod = mod_add((char*)binary->data+0x50);
+        dump_cuda_symbol(mod);
+        dump_cuda_kernel(mod);
+
+
         // initialize arguments
         memset(&arg, 0, ARG_LEN);
         size = (uint32_t)(fatHeader->headerSize + fatHeader->fatSize);
@@ -635,7 +672,7 @@ extern "C" void** __cudaRegisterFatBinary(void *fatCubin)
         if(fatHeader->fatSize == 0) {
             debug("Invalid fatbin.\n");
             p_last_binary = NULL;
-            return (void **)fatCubinHandle;
+            return fatCubinHandle;
         }
         // 
         if(p_binary->total_size < sizeof(fatbin_buf_t) + p_binary->size + size + sizeof(cubin_buf_t)) {
@@ -667,7 +704,7 @@ extern "C" void** __cudaRegisterFatBinary(void *fatCubin)
         //     error(" fatbin not registered\n");
         //     exit(-1);
         // }
-        return (void **)fatCubinHandle;
+        return fatCubinHandle;
     }
     else
     {
@@ -678,15 +715,9 @@ extern "C" void** __cudaRegisterFatBinary(void *fatCubin)
 
 extern "C" void __cudaUnregisterFatBinary(void **fatCubinHandle)
 {
-    // VirtIOArg arg;
-    // func();
-    // memset(&arg, 0, ARG_LEN);
-    // arg.cmd = VIRTIO_CUDA_UNREGISTERFATBINARY;
-    // arg.src = (uint64_t)(*fatCubinHandle);
-    // arg.tid = syscall(SYS_gettid);
-    // send_to_device(VIRTIO_IOC_UNREGISTERFATBINARY, &arg);
-    if (fatCubinHandle != NULL)
-        __libc_free(fatCubinHandle);
+    func();
+    debug("fatcubinhandle %p\n", fatCubinHandle[0]);
+    return ;
 }
 
 extern "C" void __cudaRegisterFatBinaryEnd(
@@ -694,6 +725,7 @@ extern "C" void __cudaRegisterFatBinaryEnd(
 )
 {
     func();
+    debug("fatcubinhandle %p\n", fatCubinHandle[0]);
     return ;
 }
 
@@ -724,12 +756,24 @@ extern "C" void __cudaRegisterFunction(
 //  debug(" fatbin version= %d\n", fatBinHeader->version);
 //  debug(" fatbin headerSize= 0x%x\n", fatBinHeader->headerSize);
 //  debug(" fatbin fatSize= 0x%llx\n", fatBinHeader->fatSize);
-    debug(" fatCubinHandle = %p, value =%p\n", fatCubinHandle, *fatCubinHandle);
+    debug(" fatCubinHandle = %p, value =%p\n", fatCubinHandle, fatCubinHandle[0]);
     debug(" hostFun = %s, value =%p\n", hostFun, hostFun);
     debug(" deviceFun =%s, %p\n", deviceFun, deviceFun);
     debug(" deviceName = %s\n", deviceName);
     debug(" thread_limit = %d\n", thread_limit);
+    debug(" tid = {%d, %d, %d} \n", tid?tid->x:0, tid?tid->y:0, tid?tid->z:0);
+    debug(" bid = {%d, %d, %d} \n", bid?bid->x:0, bid?bid->y:0, bid?bid->z:0);
+    debug(" bDim = {%d, %d, %d} \n", bDim?bDim->x:0, bDim?bDim->y:0, bDim?bDim->z:0);
+    debug(" gDim = {%d, %d, %d} \n", gDim?gDim->x:0, gDim?gDim->y:0, gDim?gDim->z:0);
     buf_size = (uint32_t)(strlen(deviceName)+1);
+
+    struct CUfunc_st* func;
+    if( (func = lookup_func_by_name(ctx->head_mod, deviceName)) == NULL) {
+        error("Failed to lookup kernel name %s in cubin\n", deviceName);
+        return;
+    }
+    func->raw_func.host_func = (void *)hostFun;
+
     memset(&arg, 0, ARG_LEN);
     arg.cmd     = VIRTIO_CUDA_REGISTERFUNCTION;
     arg.src     = (uint64_t)fatBinHeader;
@@ -795,6 +839,14 @@ extern "C" void __cudaRegisterVar(
     debug(" constant = %d\n", constant);
     debug(" global = %d\n", global);
     buf_size = (uint32_t)(strlen(deviceName)+1);
+
+    struct cuda_const_symbol* cs;
+    if( (cs = lookup_symbol_by_name(ctx->head_mod, deviceName)) == NULL) {
+        error("Failed to lookup symbol name %s in cubin\n", deviceName);
+        return;
+    }
+    cs->host_var = (void *)hostVar;
+
     memset(&arg, 0, ARG_LEN);
     arg.cmd     = VIRTIO_CUDA_REGISTERVAR;
     arg.src     = (uint64_t)fatBinHeader;
@@ -879,42 +931,106 @@ extern "C" char __cudaInitModule(void **fatCubinHandle)
     return 'U';
 }
 
-/*extern "C" cudaError_t  __cudaPopCallConfiguration(
-  dim3         *gridDim,
-  dim3         *blockDim,
-  size_t       *sharedMem,
-  void         *stream
-)
-{
-    func();
-    debug("Undefined\n");
-    return cudaSuccess;
-}*/
-
 extern "C" unsigned  __cudaPushCallConfiguration(
-    dim3         gridDim,
-    dim3         blockDim,
-    size_t sharedMem,
-    struct CUstream_st *stream
-)
+    dim3 gridDim,
+    dim3 blockDim, 
+    size_t sharedMem = 0, 
+    void *stream = 0)
 {
     func();
     debug("gridDim= %u %u %u\n", gridDim.x, gridDim.y, gridDim.z);  
     debug("blockDim= %u %u %u\n", blockDim.x, blockDim.y, blockDim.z);
     debug("sharedMem= %zu\n", sharedMem);
-    // debug("stream= %lu\n", (cudaStream_t)(stream));
+    debug("stream= %lu\n", (cudaStream_t)(stream));
     
-    memset(cudaKernelPara, 0, 512);
-    cudaParaSize = sizeof(uint32_t);
 
     memset(&kernelConf, 0, sizeof(KernelConf_t));
     kernelConf.gridDim      = gridDim;
     kernelConf.blockDim     = blockDim;
     kernelConf.sharedMem    = sharedMem;
-    kernelConf.stream       = (cudaStream_t)stream;
+    kernelConf.stream       = stream;
     return 0;
 }
 
+extern "C" cudaError_t  __cudaPopCallConfiguration(
+    dim3         *gridDim,
+    dim3         *blockDim,
+    size_t       *sharedMem,
+    void         *stream
+)
+{
+    func();
+    *gridDim = kernelConf.gridDim;
+    *blockDim = kernelConf.blockDim;
+    *sharedMem = kernelConf.sharedMem;
+    stream = kernelConf.stream;
+    return cudaSuccess;
+}
+
+/*
+CUDA10
+*/
+extern "C" cudaError_t cudaLaunchKernel(
+    const void *hostFunc,
+    dim3 gridDim,
+    dim3 blockDim,
+    void **args,
+    size_t sharedMem,
+    cudaStream_t stream
+)
+{
+    struct cuda_param *param_data = NULL;
+    struct CUkernel_st *kernel_param;
+    func();
+    debug("hostFunc %lx\n", (uint64_t)hostFunc);
+    debug("gridDim= %u %u %u\n", gridDim.x, gridDim.y, gridDim.z);  
+    debug("blockDim= %u %u %u\n", blockDim.x, blockDim.y, blockDim.z);
+    debug("sharedMem= %zu\n", sharedMem);
+    debug("stream= %lu\n", stream);
+
+    struct CUfunc_st* func;
+    if( (func = lookup_func_by_hostfunc(ctx->head_mod, hostFunc)) == NULL) {
+        error("Failed to lookup kernel host func %p in cubin\n", hostFunc);
+        return cudaErrorUnknown;
+    }
+    struct cuda_raw_func *raw_func = &func->raw_func;
+    debug("kernel name %s\n", raw_func->name);
+    debug("kernel param count %d\n", raw_func->param_count);
+    debug("kernel param size %d\n", raw_func->param_size);
+    kernel_param = (struct CUkernel_st*)malloc(sizeof(struct CUkernel_st) + raw_func->param_size);
+    kernel_param->grid_x = gridDim.x;
+    kernel_param->grid_y = gridDim.y;
+    kernel_param->grid_z = gridDim.z;
+    kernel_param->block_x = blockDim.x;
+    kernel_param->block_y = blockDim.y;
+    kernel_param->block_z = blockDim.z;
+    kernel_param->smem_size = sharedMem;
+    kernel_param->stream = (uint64_t)stream;
+    kernel_param->param_nr = raw_func->param_count;
+    kernel_param->param_size = raw_func->param_size;
+    param_data = raw_func->param_data;
+    while (param_data) {
+        debug("\tparam{%d, 0x%x, 0x%x},\n", 
+                   param_data->idx, 
+                   param_data->offset, 
+                   param_data->size);
+        memcpy(&kernel_param->param_buf[param_data->offset], 
+                    args[param_data->idx], param_data->size);
+        param_data = param_data->next;
+    }
+    /*
+    args = {&arg0, &arg1};
+    debug("ptr=%p, content=%p\n", args[0], *((void**)args[0]));
+    debug("ptr=%p, content=%f\n", args[1], *(float*)args[1]);
+    if (args[2] == NULL)
+        debug("NULL\n");
+    */
+    return cudaSuccess;
+}
+
+/*
+CUDA9
+*/
 extern "C" cudaError_t cudaConfigureCall(
     dim3 gridDim, dim3 blockDim, size_t sharedMem, cudaStream_t stream)
 {
@@ -937,6 +1053,9 @@ extern "C" cudaError_t cudaConfigureCall(
     return cudaSuccess;
 }
 
+/*
+CUDA9
+*/
 extern "C" cudaError_t cudaSetupArgument(const void* arg, size_t size, size_t offset)
 {
     func();
@@ -957,20 +1076,6 @@ extern "C" cudaError_t cudaSetupArgument(const void* arg, size_t size, size_t of
     (*((uint32_t*)cudaKernelPara))++;
     return cudaSuccess;
 }
-
-/*extern "C" cudaError_t cudaLaunchKernel(
-    const void *func,
-    dim3 gridDim,
-    dim3 blockDim,
-    void **args,
-    size_t sharedMem,
-    cudaStream_t stream
-)
-{
-    func();
-    return cudaSuccess;
-}
-*/
 
 extern "C" cudaError_t cudaLaunch(const void *entry)
 {

@@ -37,8 +37,8 @@ SGX_ARCH ?= x64
 SGX_DEBUG ?= 1
 CUDA_LIB_PATH = /usr/local/cuda/lib64
 ENCLAVE_PATH = $(CUDA_LIB_PATH)
-CUDA_MAJOR = 9
-CUDA_MINOR = 1
+CUDA_MAJOR = 10
+CUDA_MINOR = 0
 CUDA_PATHCHLEVEL = 0
 
 
@@ -92,6 +92,7 @@ else
 endif
 CUDAPATH=/usr/local/cuda
 App_Cpp_Files := isv_app/isv_app.cpp
+Utils_C_Files := utils/cudump.c
 App_Include_Paths := -I$(SGX_SDK)/include -I$(CUDAPATH)/include
 
 App_C_Flags := -fPIC -Wno-attributes $(App_Include_Paths)
@@ -119,6 +120,7 @@ else
 endif
 
 App_Cpp_Objects := $(App_Cpp_Files:.cpp=.o)
+Utils_C_Objects := $(Utils_C_Files:.c=.o)
 
 App_Name := libcudart.so.$(CUDA_MAJOR).$(CUDA_MINOR).$(CUDA_PATHCHLEVEL)
 
@@ -243,7 +245,11 @@ isv_app/%.o: isv_app/%.cpp isv_app/isv_enclave_u.h
 	@$(CC) $(SGX_COMMON_CXXFLAGS) $(App_Cpp_Flags) -c $< -o $@
 	@echo "CXX  <=  $<"
 
-$(App_Name): isv_app/isv_enclave_u.o $(App_Cpp_Objects)
+utils/%.o: utils/%.c
+	@$(CC) $(SGX_COMMON_CFLAGS) $(App_C_Flags) -c $< -o $@
+	@echo "C  <=  $<"
+
+$(App_Name): isv_app/isv_enclave_u.o $(App_Cpp_Objects) $(Utils_C_Objects)
 	@$(CC) $^ -o $@ $(App_Link_Flags)
 	@echo "LINK =>  $@"
 

@@ -80,7 +80,7 @@ int main()
 	dim3 block, grid;
 	int num = 1 << 14;
     int nbytes = num * sizeof(float);
-    int value=41;
+    float value=41;
     struct timeval malloc_start, malloc_end;
     struct timeval meminit_start, meminit_end;
     struct timeval free_start, free_end;
@@ -157,8 +157,9 @@ int main()
 	#endif
 	
 	// set kernel launch configuration
-    block = dim3(4);
-    grid  = dim3((num + block.x - 1) / block.x);
+    block = dim3(4,2,1);
+    // grid  = dim3((num + block.x - 1) / block.x);
+    grid  = dim3(16,2,1);
 
 	#ifdef  TIMING
 		gettimeofday(&HtoD_start, NULL);
@@ -172,6 +173,7 @@ int main()
 	#ifdef  TIMING
 		gettimeofday(&kernel_start, NULL);
 	#endif
+	printf("value address %p\n", &value);
 	kernel<<<grid, block>>>(d_a, value);
 	#ifdef  TIMING
 		gettimeofday(&kernel_end, NULL);

@@ -1,7 +1,7 @@
 TARGET	= run
 NVCC	= nvcc -arch sm_35 --cudart=shared
 LIBS	= -lcudart
-CFLAGS	= -L /usr/local/vcuda/lib64/
+CFLAGS	= 
 
 all:
 #	nvcc launchkernel.cu --cudart=shared -o run

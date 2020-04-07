@@ -1,7 +1,7 @@
 #ifndef VIRTCR_IOC_H
 #define VIRTCR_IOC_H
 
-// #define VIRTIO_CUDA_DEBUG
+#define VIRTIO_CUDA_DEBUG
 // #define KMALLOC_SHIFT 22 // 4MB
 #define TIMING 
 #define KMALLOC_SHIFT 13
