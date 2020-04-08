@@ -4,7 +4,7 @@ ROUTINES= /home/max/vgpu/vm
 TARGET	= run
 NVCC	= nvcc -arch sm_35 --cudart=shared
 LIBS	= -lcudart
-CFLAGS	= -L /usr/local/vcuda/lib64/
+CFLAGS	= 
 
 all:
 #	nvcc launchkernel.cu --cudart=shared -o run
@@ -19,4 +19,7 @@ scp: fat
 	scp ./run.fatbin $(USER)@$(HOST):$(ROUTINES)
 
 fat:
-	nvcc step2.cu --cudart=shared --fatbin -o run.fatbin
+	nvcc launchkernel.cu --cudart=shared --fatbin -o run.fatbin
+
+cubin:
+	nvcc launchkernel.cu --cudart=shared --cubin -o run.cubin

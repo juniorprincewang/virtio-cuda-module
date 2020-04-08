@@ -2,6 +2,7 @@ virtio_cuda.o.ur-safe
 test/*/run
 lib/libcudart.so*
 *.o
+*.cubin
 NVIDIA_CUDA-9.1_Samples/bin/
 NVIDIA_CUDA-9.1_Samples/0_Simple/vectorAdd/vectorAdd
 NVIDIA_CUDA-9.1_Samples/0_Simple/matrixMul/matrixMul

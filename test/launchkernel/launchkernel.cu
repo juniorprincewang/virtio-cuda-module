@@ -71,7 +71,6 @@ int main()
 			__cudaUnregisterFatBinary
 			__cudaRegisterFunction
 	*/
-	// return 0;
 	int devID=1;
 	int count = 0;
 	struct cudaDeviceProp props;
@@ -98,6 +97,8 @@ int main()
 			cudaGetDevice
 			cudaGetDeviceProperties
 	*/
+	CHECK(cudaMalloc((void**)&d_a, nbytes));
+	return 0;
 	devID = 0;
 	CHECK(cudaSetDevice(devID));
 	CHECK(cudaGetDeviceCount(&count));

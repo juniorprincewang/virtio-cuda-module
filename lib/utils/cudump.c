@@ -289,6 +289,7 @@ void dump_kernel(struct CUmod_st *mod)
         f = &func->raw_func;
         printf("func name %s, size %d\n", 
             f->name, f->code_size);
+        printf("func code buf %p\n", f->code_buf);
         printf("\t},\n");
         printf("\t.param_base = 0x%x,\n", f->param_base);
         printf("\t.param_size = 0x%x,\n", f->param_size);

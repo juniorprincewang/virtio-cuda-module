@@ -93,7 +93,7 @@ typedef struct KernelConf
     dim3 gridDim;
     dim3 blockDim;
     size_t sharedMem;
-    void * stream;
+    CUstream stream;
 } KernelConf_t ;
 
 static uint8_t cudaKernelPara[512]; // uint8_t === unsigned char
@@ -659,7 +659,6 @@ extern "C" void** __cudaRegisterFatBinary(void *fatCubin)
         dump_cuda_symbol(mod);
         dump_cuda_kernel(mod);
 
-
         // initialize arguments
         memset(&arg, 0, ARG_LEN);
         size = (uint32_t)(fatHeader->headerSize + fatHeader->fatSize);
@@ -948,7 +947,7 @@ extern "C" unsigned  __cudaPushCallConfiguration(
     kernelConf.gridDim      = gridDim;
     kernelConf.blockDim     = blockDim;
     kernelConf.sharedMem    = sharedMem;
-    kernelConf.stream       = stream;
+    kernelConf.stream       = (CUstream)stream;
     return 0;
 }
 
@@ -979,10 +978,22 @@ extern "C" cudaError_t cudaLaunchKernel(
     cudaStream_t stream
 )
 {
+    VirtIOArg arg;
     struct cuda_param *param_data = NULL;
     struct CUkernel_st *kernel_param;
+    uint32_t buf_size = 0;
     func();
-    debug("hostFunc %lx\n", (uint64_t)hostFunc);
+    api_inc(API_KERNEL);
+    init_primary_context();
+    if(!hostFunc)
+        return cudaSuccess;
+    if (kernelConf.gridDim.x<=0 || kernelConf.gridDim.y<=0 || 
+        kernelConf.gridDim.z<=0 ||
+        kernelConf.blockDim.x<=0 || kernelConf.blockDim.y<=0 || 
+        kernelConf.blockDim.z<=0 )
+        return cudaSuccess;
+
+    debug("hostFunc %p\n", hostFunc);
     debug("gridDim= %u %u %u\n", gridDim.x, gridDim.y, gridDim.z);  
     debug("blockDim= %u %u %u\n", blockDim.x, blockDim.y, blockDim.z);
     debug("sharedMem= %zu\n", sharedMem);
@@ -997,15 +1008,16 @@ extern "C" cudaError_t cudaLaunchKernel(
     debug("kernel name %s\n", raw_func->name);
     debug("kernel param count %d\n", raw_func->param_count);
     debug("kernel param size %d\n", raw_func->param_size);
-    kernel_param = (struct CUkernel_st*)malloc(sizeof(struct CUkernel_st) + raw_func->param_size);
-    kernel_param->grid_x = gridDim.x;
-    kernel_param->grid_y = gridDim.y;
-    kernel_param->grid_z = gridDim.z;
-    kernel_param->block_x = blockDim.x;
-    kernel_param->block_y = blockDim.y;
-    kernel_param->block_z = blockDim.z;
-    kernel_param->smem_size = sharedMem;
-    kernel_param->stream = (uint64_t)stream;
+    buf_size = sizeof(struct CUkernel_st)  + raw_func->param_size;
+    kernel_param = (struct CUkernel_st*)malloc(buf_size);
+    kernel_param->grid_x = kernelConf.gridDim.x;
+    kernel_param->grid_y = kernelConf.gridDim.y;
+    kernel_param->grid_z = kernelConf.gridDim.z;
+    kernel_param->block_x = kernelConf.blockDim.x;
+    kernel_param->block_y = kernelConf.blockDim.y;
+    kernel_param->block_z = kernelConf.blockDim.z;
+    kernel_param->smem_size = kernelConf.sharedMem;
+    kernel_param->stream = kernelConf.stream;
     kernel_param->param_nr = raw_func->param_count;
     kernel_param->param_size = raw_func->param_size;
     param_data = raw_func->param_data;
@@ -1025,6 +1037,15 @@ extern "C" cudaError_t cudaLaunchKernel(
     if (args[2] == NULL)
         debug("NULL\n");
     */
+
+    memset(&arg, 0, sizeof(VirtIOArg));
+    arg.cmd = VIRTIO_CUDA_LAUNCH;
+    arg.src = (uint64_t)kernel_param;
+    arg.srcSize = buf_size;
+    arg.flag    = (uint64_t)hostFunc;
+    arg.tid     = (uint32_t)syscall(SYS_gettid);
+    // send_to_device(VIRTIO_IOC_LAUNCH, &arg);
+    // return (cudaError_t)arg.cmd;
     return cudaSuccess;
 }
 
@@ -1048,6 +1069,8 @@ extern "C" cudaError_t cudaConfigureCall(
     kernelConf.gridDim      = gridDim;
     kernelConf.blockDim     = blockDim;
     kernelConf.sharedMem    = sharedMem;
+    // typedef struct CUstream_st *cudaStream_t;
+    // typedef struct CUstream_st *CUstream ;  
     kernelConf.stream       = stream;
     // Do not invoke ioctl
     return cudaSuccess;
@@ -1114,7 +1137,7 @@ extern "C" cudaError_t cudaLaunch(const void *entry)
     arg.flag    = (uint64_t)entry;
     arg.tid     = (uint32_t)syscall(SYS_gettid);
     send_to_device(VIRTIO_IOC_LAUNCH, &arg);
-    return (cudaError_t)arg.cmd;    
+    return (cudaError_t)arg.cmd;
 }
 
 extern "C" cudaError_t cudaMemcpy(void *dst, const void *src, size_t count, enum cudaMemcpyKind kind)

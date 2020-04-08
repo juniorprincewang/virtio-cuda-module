@@ -26,7 +26,7 @@ enum API_TYPE{
 	#define ENABLE_ENC
 #endif
 // #define VIRTIO_LOCK
-#define VIRTIO_LOCK_USER
+// #define VIRTIO_LOCK_USER
 
 #ifndef __KERNEL__
 #define __user

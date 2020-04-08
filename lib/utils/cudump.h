@@ -6,6 +6,7 @@
 #include <elf.h>
 #include <limits.h>
 #include "list.h"
+#include <cuda.h>
 
 #define CUDA_ARCH_SM_1X 0x50 /* sm_1x */
 #define CUDA_ARCH_SM_2X 0xc0 /* sm_2x */
@@ -107,6 +108,7 @@ struct cuda_raw_func {
 struct cuda_const_symbol {
 	int idx; /* cX[] index. */
 	char *name;
+	CUdeviceptr dptr;
 	void *host_var;
 	uint32_t offset; /* offset in cX[]. */
 	uint32_t size; /* size of const value. */
@@ -115,6 +117,7 @@ struct cuda_const_symbol {
 
 struct CUmod_st {
 	FILE *fp;
+	CUmodule module;
 	void *cubin;
 	void *bin;
 	uint64_t code_addr;
@@ -136,6 +139,7 @@ struct CUmod_st {
 };
 
 struct CUfunc_st {
+	CUfunction function;
 	struct cuda_raw_func raw_func;
 	struct list_head list_entry;
 	struct CUmod_st *mod;
@@ -144,6 +148,7 @@ struct CUfunc_st {
 struct CUctx_st {
 	int fd; // fd of device file
 	int primary_context_initialized;
+	CUcontext ctx;
 	uint32_t nr_mod;
 	struct CUmod_st *head_mod;
 	struct CUmod_st *cur_mod;
@@ -157,7 +162,7 @@ struct CUkernel_st {
     uint32_t block_y;
     uint32_t block_z;
     uint32_t smem_size;
-    uint64_t stream;
+    CUstream stream;
     uint32_t param_nr;
     uint32_t param_size;
     uint8_t param_buf[];
