@@ -7,6 +7,8 @@
 #define KMALLOC_SHIFT 13
 #define KMALLOC_SIZE (1UL<<KMALLOC_SHIFT)
 
+
+
 enum API_TYPE{
     API_OTHER,     // 0
     API_KERNEL,    // 1
@@ -91,6 +93,14 @@ enum API_TYPE{
 #define VIRTIO_CUDA_EVENTQUERY 					42
 #define VIRTIO_CUDA_PRIMARYCONTEXT 				43
 #define VIRTIO_CUDA_DEVICESETCACHECONFIG 		44
+//-------------------------------------
+#define VIRTIO_CUDA_MEMCPY_HTOD					50
+#define VIRTIO_CUDA_MEMCPY_DTOH					51
+#define VIRTIO_CUDA_MEMCPY_DTOD					52
+#define VIRTIO_CUDA_MEMCPY_HTOD_ASYNC 			53
+#define VIRTIO_CUDA_MEMCPY_DTOH_ASYNC 			54
+#define VIRTIO_CUDA_MEMCPY_DTOD_ASYNC  			55
+#define VIRTIO_CUDA_LAUNCH_KERNEL				56
 //SGX----------------------------------
 #define VIRTIO_SGX_MSG0							80
 #define VIRTIO_SGX_MSG1							81
@@ -142,6 +152,16 @@ struct GPUDevice {
 #else
 
 #include <linux/ioctl.h>
+#include <linux/list.h>
+
+#define CHUNK_SHIFT 20
+#define CHUNK_SIZE (1UL<<CHUNK_SHIFT)
+
+struct mem_page_st {
+	struct list_head list;
+	void *data;
+	long size;
+};
 
 
 #endif //KERNEL
@@ -282,6 +302,21 @@ typedef struct VirtIOArg
 	_IOWR(VIRTIO_IOC_ID,43,VirtIOArg)
 #define VIRTIO_IOC_DEVICESETCACHECONFIG \
 	_IOWR(VIRTIO_IOC_ID,44,VirtIOArg)
+// ----------------------------------
+#define VIRTIO_IOC_MEMCPY_HTOD \
+	_IOWR(VIRTIO_IOC_ID,50,VirtIOArg)
+#define VIRTIO_IOC_MEMCPY_DTOH \
+	_IOWR(VIRTIO_IOC_ID,51,VirtIOArg)
+#define VIRTIO_IOC_MEMCPY_DTOD \
+	_IOWR(VIRTIO_IOC_ID,52,VirtIOArg)
+#define VIRTIO_IOC_MEMCPY_HTOD_ASYNC \
+	_IOWR(VIRTIO_IOC_ID,53,VirtIOArg)
+#define VIRTIO_IOC_MEMCPY_DTOH_ASYNC \
+	_IOWR(VIRTIO_IOC_ID,54,VirtIOArg)
+#define VIRTIO_IOC_MEMCPY_DTOD_ASYNC \
+	_IOWR(VIRTIO_IOC_ID,55,VirtIOArg)
+#define VIRTIO_IOC_LAUNCH_KERNEL \
+	_IOWR(VIRTIO_IOC_ID,56,VirtIOArg)
 // SGX-------------------------------
 #define VIRTIO_IOC_SGX_MSG0 \
 	_IOWR(VIRTIO_IOC_ID,80,VirtIOArg)

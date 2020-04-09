@@ -982,6 +982,7 @@ extern "C" cudaError_t cudaLaunchKernel(
     struct cuda_param *param_data = NULL;
     struct CUkernel_st *kernel_param;
     uint32_t buf_size = 0;
+    uint32_t *param_offset_list = NULL;
     func();
     api_inc(API_KERNEL);
     init_primary_context();
@@ -1018,16 +1019,23 @@ extern "C" cudaError_t cudaLaunchKernel(
     kernel_param->block_z = kernelConf.blockDim.z;
     kernel_param->smem_size = kernelConf.sharedMem;
     kernel_param->stream = kernelConf.stream;
+    debug("kernel param: \n");
+    debug("\tgridDim= %u %u %u\n", kernelConf.gridDim.x, kernelConf.gridDim.y, kernelConf.gridDim.z);  
+    debug("\tblockDim= %u %u %u\n", kernelConf.blockDim.x, kernelConf.blockDim.y, kernelConf.blockDim.z);
+    debug("\tsharedMem= %zu\n", kernelConf.sharedMem);
+    debug("\tstream= %lu\n", kernelConf.stream);
     kernel_param->param_nr = raw_func->param_count;
     kernel_param->param_size = raw_func->param_size;
     param_data = raw_func->param_data;
+    param_offset_list = (uint32_t *)malloc(sizeof(uint32_t)*raw_func->param_count);
     while (param_data) {
         debug("\tparam{%d, 0x%x, 0x%x},\n", 
                    param_data->idx, 
                    param_data->offset, 
                    param_data->size);
-        memcpy(&kernel_param->param_buf[param_data->offset], 
+        memcpy(kernel_param->param_buf+param_data->offset, 
                     args[param_data->idx], param_data->size);
+        param_offset_list[param_data->idx] = (uint32_t)param_data->offset;
         param_data = param_data->next;
     }
     /*
@@ -1039,13 +1047,15 @@ extern "C" cudaError_t cudaLaunchKernel(
     */
 
     memset(&arg, 0, sizeof(VirtIOArg));
-    arg.cmd = VIRTIO_CUDA_LAUNCH;
+    arg.cmd = VIRTIO_CUDA_LAUNCH_KERNEL;
     arg.src = (uint64_t)kernel_param;
     arg.srcSize = buf_size;
     arg.flag    = (uint64_t)hostFunc;
+    arg.param   = (uint64_t)param_offset_list;
+    arg.paramSize   = sizeof(uint32_t)*raw_func->param_count;
     arg.tid     = (uint32_t)syscall(SYS_gettid);
-    // send_to_device(VIRTIO_IOC_LAUNCH, &arg);
-    // return (cudaError_t)arg.cmd;
+    send_to_device(VIRTIO_IOC_LAUNCH_KERNEL, &arg);
+    return (cudaError_t)arg.cmd;
     return cudaSuccess;
 }
 
@@ -1055,7 +1065,6 @@ CUDA9
 extern "C" cudaError_t cudaConfigureCall(
     dim3 gridDim, dim3 blockDim, size_t sharedMem, cudaStream_t stream)
 {
-    // VirtIOArg arg;
     func();
     debug("gridDim= %u %u %u\n", gridDim.x, gridDim.y, gridDim.z);  
     debug("blockDim= %u %u %u\n", blockDim.x, blockDim.y, blockDim.z);
@@ -1154,18 +1163,25 @@ extern "C" cudaError_t cudaMemcpy(void *dst, const void *src, size_t count, enum
         return cudaSuccess;
     mem_inc(kind, count);
     memset(&arg, 0, sizeof(VirtIOArg));
-    arg.cmd     = VIRTIO_CUDA_MEMCPY;
     arg.flag    = kind;
-    arg.src     = (uint64_t)src;
     arg.srcSize = (uint32_t)count;
-    arg.dst     = (uint64_t)dst;
     arg.dstSize = (uint32_t)count;
     arg.tid     = (uint32_t)syscall(SYS_gettid);
+    arg.src     = (uint64_t)src;
+    arg.dst     = (uint64_t)dst;
     debug("gettid %d\n", arg.tid);
-    send_to_device(VIRTIO_IOC_MEMCPY, &arg);
-    if (arg.flag == cudaMemcpyHostToHost) {
+    if (kind == cudaMemcpyHostToDevice) {
+        arg.cmd     = VIRTIO_CUDA_MEMCPY_HTOD;
+        send_to_device(VIRTIO_IOC_MEMCPY_HTOD, &arg);
+    } else if(kind ==cudaMemcpyDeviceToHost) {
+        arg.cmd     = VIRTIO_CUDA_MEMCPY_DTOH;
+        send_to_device(VIRTIO_IOC_MEMCPY_DTOH, &arg);
+    } else if(kind == cudaMemcpyHostToHost) {
         memcpy(dst, src, count);
         return cudaSuccess;
+    } else if (kind == cudaMemcpyDeviceToDevice) {
+        arg.cmd     = VIRTIO_CUDA_MEMCPY_DTOD;
+        send_to_device(VIRTIO_IOC_MEMCPY_DTOD, &arg);
     }
     return (cudaError_t)arg.cmd;    
 }

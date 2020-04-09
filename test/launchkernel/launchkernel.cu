@@ -97,8 +97,7 @@ int main()
 			cudaGetDevice
 			cudaGetDeviceProperties
 	*/
-	CHECK(cudaMalloc((void**)&d_a, nbytes));
-	return 0;
+	
 	devID = 0;
 	CHECK(cudaSetDevice(devID));
 	CHECK(cudaGetDeviceCount(&count));
@@ -158,9 +157,9 @@ int main()
 	#endif
 	
 	// set kernel launch configuration
-    block = dim3(4,2,1);
-    // grid  = dim3((num + block.x - 1) / block.x);
-    grid  = dim3(16,2,1);
+    block = dim3(32,1,1);
+    grid  = dim3((num + block.x - 1) / block.x);
+    // grid  = dim3(16,2,1);
 
 	#ifdef  TIMING
 		gettimeofday(&HtoD_start, NULL);
