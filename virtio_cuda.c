@@ -1841,6 +1841,7 @@ static int cuda_free(VirtIOArg __user *arg, struct port *port)
 	gldebug("[+] arg->cmd = %d\n", payload->cmd);
 	put_user(payload->cmd, &arg->cmd);
 	kfree(payload);
+	return 0;
 }
 
 int cuda_malloc_host(VirtIOArg __user *arg, struct port *port)
@@ -2022,50 +2023,29 @@ int cuda_host_unregister(VirtIOArg __user *arg, struct port *port)
 	return ret;
 }
 
-int cuda_memcpy_to_symbol(VirtIOArg __user *arg, struct port *port)
+static int __template(VirtIOArg __user *arg, struct port *port)
 {
 	VirtIOArg *payload;
-	void *h_mem = NULL;
-	uint32_t size;
-	uint64_t direction;
-	int ret = 0;
+	struct scatterlist *sgs[1], arg_sg;
+	int num_out = 0, num_in = 0;
 
 	func();
-	if(get_user(direction, &arg->flag)){
-		pr_err("[ERROR] can not get direction\n");	
-		return -EFAULT;
-	}
-	if (direction != 1) {
-		pr_err("[ERROR] Failed to get direction.\n");
-		return -ENOMEM;
-	}
 	payload = (VirtIOArg *)memdup_user(arg, ARG_SIZE);
 	if(!payload) {
 		pr_err("[ERROR] can not malloc 0x%lx memory\n", ARG_SIZE);
 		return -ENOMEM;
 	}
-	size = payload->srcSize;
-	gldebug("src=0x%llx, count=0x%x, symbol=0x%llx, sym size=0x%x, "
-			"kind=%llu, offset=0x%llx\n",
+	gldebug("src=0x%llx, srcSize=0x%x, dst=0x%llx, dstSize=0x%x, "
+			"flag=%llu, param=0x%llx\n",
 			payload->src, payload->srcSize, payload->dst, payload->dstSize, 
 			payload->flag, payload->param);
-	// cudaMemcpyHostToDevice
-	payload->flag = 1;
-	if(!find_page_by_addr(payload->src, port)) {
-		payload->flag = 0;
-		h_mem = memdup_user((const void __user *)payload->src, 
-							(size_t)size);
-		if(!h_mem) {
-			pr_err("[ERROR] can not malloc 0x%x memory\n", size);	
-			return -ENOMEM;
-		}
-		payload->param2 = (uint64_t)virt_to_phys(h_mem);
-	}
+	sg_init_one(&arg_sg, payload, sizeof(*payload));
+	sgs[num_out++] = &arg_sg;
+
 	#ifdef VIRTIO_LOCK
 	spin_lock(&port->io_lock);
 	#endif
-
-	ret = send_to_virtio(port, (void *)payload, ARG_SIZE);
+	send_sgs_to_virtio(port, sgs, num_out, num_in);
 	#ifdef VIRTIO_LOCK
 	spin_unlock(&port->io_lock);
 	#endif
@@ -2073,29 +2053,63 @@ int cuda_memcpy_to_symbol(VirtIOArg __user *arg, struct port *port)
 	gldebug("[+] now analyse return buf\n");
 	gldebug("[+] arg->cmd = %d\n", payload->cmd);
 	put_user(payload->cmd, &arg->cmd);
-	if(!payload->flag)
-		kfree(h_mem);
 	kfree(payload);
-	return ret;
+	return 0;
+}
+
+int cuda_memcpy_to_symbol(VirtIOArg __user *arg, struct port *port)
+{
+	VirtIOArg *payload;
+	void *va = NULL;
+	struct scatterlist *sgs[2], arg_sg, src_sg;
+	int num_out = 0, num_in = 0;
+
+	func();
+	payload = (VirtIOArg *)memdup_user(arg, ARG_SIZE);
+	if(!payload) {
+		pr_err("[ERROR] can not malloc 0x%lx memory\n", ARG_SIZE);
+		return -ENOMEM;
+	}
+	va = memdup_user((void*)payload->src, payload->srcSize);
+	if(!va) {
+		pr_err("[ERROR] can not malloc 0x%x memory\n", payload->srcSize);
+		return -ENOMEM;
+	}
+	gldebug("src=0x%llx, srcSize=0x%x, dst=0x%llx, dstSize=0x%x, "
+			"flag=%llu, param=0x%llx\n",
+			payload->src, payload->srcSize, payload->dst, payload->dstSize,
+			payload->flag, payload->param);
+	sg_init_one(&arg_sg, payload, sizeof(*payload));
+	sgs[num_out++] = &arg_sg;
+	sg_init_one(&src_sg, va, payload->srcSize);
+	sgs[num_out++] = &src_sg;
+	payload->nr_elem = num_out+num_in;
+
+	#ifdef VIRTIO_LOCK
+	spin_lock(&port->io_lock);
+	#endif
+	send_sgs_to_virtio(port, sgs, num_out, num_in);
+	#ifdef VIRTIO_LOCK
+	spin_unlock(&port->io_lock);
+	#endif
+
+	gldebug("[+] now analyse return buf\n");
+	gldebug("[+] arg->cmd = %d\n", payload->cmd);
+	put_user(payload->cmd, &arg->cmd);
+	kfree(va);
+	kfree(payload);
+	return 0;
 }
 
 int cuda_memcpy_from_symbol(VirtIOArg __user *arg, struct port *port)
 {
 	VirtIOArg *payload;
-	void *h_mem = NULL;
+	void *va = NULL;
 	uint32_t size;
-	uint64_t direction;
-	int ret = 0;
+	struct scatterlist *sgs[2], arg_sg, host_sg;
+	int num_out = 0, num_in = 0;
 
 	func();
-	if(get_user(direction, &arg->flag)){
-		pr_err("[ERROR] can not get direction\n");	
-		return -EFAULT;
-	}
-	if(direction != 2) {
-		pr_err("[ERROR] Failed to get direction.\n");
-		return -ENOMEM;
-	}
 	payload = (VirtIOArg *)memdup_user(arg, ARG_SIZE);
 	if(!payload) {
 		pr_err("[ERROR] can not malloc 0x%lx memory\n", ARG_SIZE);
@@ -2107,21 +2121,22 @@ int cuda_memcpy_from_symbol(VirtIOArg __user *arg, struct port *port)
 			payload->dst, payload->dstSize, payload->flag, payload->param);
 	size = payload->dstSize;
 	// cudaMemcpyDeviceToHost
-	payload->flag = 1;
-	if(!find_page_by_addr(payload->dst, port)) {
-		payload->flag = 0;
-		h_mem = kmalloc(size, GFP_KERNEL);
-		if(!h_mem) {
-			pr_err("[ERROR] can not malloc 0x%x memory\n", size);
-			return -ENOMEM;
-		}
-		payload->param2 = (uint64_t)virt_to_phys(h_mem);
+	va = kmalloc(size, GFP_KERNEL);
+	if(!va) {
+		pr_err("[ERROR] can not malloc 0x%x memory\n", size);
+		return -ENOMEM;
 	}
+
+	sg_init_one(&arg_sg, payload, sizeof(*payload));
+	sgs[num_out++] = &arg_sg;
+	sg_init_one(&host_sg, va, size);
+	sgs[num_out + num_in++] = &host_sg;
+	payload->nr_elem = num_out+num_in;
+
 	#ifdef VIRTIO_LOCK
 	spin_lock(&port->io_lock);
 	#endif
-
-	ret = send_to_virtio(port, (void*)payload, ARG_SIZE);
+	send_sgs_to_virtio(port, sgs, num_out, num_in);
 	#ifdef VIRTIO_LOCK
 	spin_unlock(&port->io_lock);
 	#endif
@@ -2129,12 +2144,14 @@ int cuda_memcpy_from_symbol(VirtIOArg __user *arg, struct port *port)
 	gldebug("[+] now analyse return buf\n");
 	gldebug("[+] arg->cmd = %d\n", payload->cmd);
 	put_user(payload->cmd, &arg->cmd);
-	if(!payload->flag) {
-		copy_to_user((void __user *)payload->dst, h_mem, size);
-		kfree(h_mem);
+	// pay attention, do not use user pointer in kernel
+	if(copy_to_user((void __user *)payload->dst, va, size)) {
+		pr_err("[ERROR] Failed to copy to user \n");
 	}
+	gldebug("[+] now analyse return buf\n");
+	kfree(va);
 	kfree(payload);
-	return ret;
+	return 0;
 }
 
 static int find_addr_in_mol(uint64_t ptr, struct port *port)
@@ -2486,14 +2503,36 @@ static int cuda_memcpy_dtoh(VirtIOArg __user *arg, struct port *port)
 
 static int cuda_memcpy_dtod(VirtIOArg __user *arg, struct port *port)
 {
-/*	VirtIOArg *payload;
-	int found = 0;
-	void *h_mem=NULL;
-	uint32_t src_size;
-	int ret = 0;
-	struct page ** page_list;
-	struct scatterlist *sg, **sgs, arg_sg;
-	int num_out = 0;*/
+	VirtIOArg *payload;
+	struct scatterlist *sgs[1], arg_sg;
+	int num_out = 0;
+	int num_in = 0;
+
+	func();
+	payload = (VirtIOArg *)memdup_user(arg, ARG_SIZE);
+	if(!payload) {
+		pr_err("[ERROR] can not malloc 0x%lx memory\n", ARG_SIZE);
+		return -ENOMEM;
+	}
+	gldebug("tid = %d, src=0x%llx, srcSize=0x%x, "
+			"dst=0x%llx, dstSize=0x%x, kind=%llu\n",
+			payload->tid, payload->src, payload->srcSize,
+			payload->dst, payload->dstSize, payload->flag);
+	sg_init_one(&arg_sg, payload, sizeof(*payload));
+	sgs[num_out++] = &arg_sg;
+
+	#ifdef VIRTIO_LOCK
+	spin_lock(&port->io_lock);
+	#endif
+	send_sgs_to_virtio(port, sgs, num_out, num_in);
+	#ifdef VIRTIO_LOCK
+	spin_unlock(&port->io_lock);
+	#endif
+
+	gldebug("[+] now analyse return buf\n");
+	gldebug("[+] arg->cmd = %d\n", payload->cmd);
+	put_user(payload->cmd, &arg->cmd);
+	kfree(payload);
 	return 0;
 }
 
@@ -2536,160 +2575,9 @@ static int cuda_memcpy_dtod_async(VirtIOArg __user *arg, struct port *port)
 	return 0;
 }
 
-int cuda_memcpy(VirtIOArg __user *arg, struct port *port)
+static int cuda_memcpy(VirtIOArg __user *arg, struct port *port)
 {
-	VirtIOArg *payload;
-	int found = 0;
-	void *h_mem=NULL;
-	uint32_t src_size;
-	int ret = 0;
-	struct page ** page_list;
-	struct scatterlist *sg, **sgs, arg_sg;
-	int num_out = 0;
-
-/*	struct scatterlist *sgs[1], sg[1];
-	sg_init_one(&sg[0], payload, sizeof(*payload));
-	sgs[0] = &sg[0];
-	send_sgs_to_virtio(port, sgs, 1, 0);*/
-
-	func();
-	payload = (VirtIOArg *)memdup_user(arg, ARG_SIZE);
-	if(!payload) {
-		pr_err("[ERROR] can not malloc 0x%lx memory\n", ARG_SIZE);
-		return -ENOMEM;
-	}
-	gldebug("tid = %d, src=0x%llx, srcSize=0x%x, "
-			"dst=0x%llx, dstSize=0x%x, kind=%llu\n",
-			payload->tid, payload->src, payload->srcSize,
-			payload->dst, payload->dstSize, payload->flag);
-	src_size = payload->srcSize;
-	if (payload->flag == 1) {
-	// cudaMemcpyHostToDevice
-		
-	/*	page_list = uaddr_to_pages(payload->src, src_size, 0);
-		sg = kvmalloc(n_pages * sizeof(struct scatterlist), GFP_KERNEL);
-		if(!sg) {
-			pr_err("[ERROR] can not malloc sg for page!\n");
-			return -ENOMEM;
-		}
-		sg_init_table(sg, n_pages);
-		#ifdef VIRTIO_LOCK
-		spin_lock(&port->io_lock);
-		#endif*/
-
-		struct virtio_uvm_page *pages= NULL;
-		pages = kmalloc(sizeof(struct virtio_uvm_page),GFP_KERNEL);
-		list_add(&pages->list, &port->page);
-		pages->uvm_start = payload->src;
-		pages->uvm_end 	= payload->src + src_size;
-		pages->block_num = 0;
-		INIT_LIST_HEAD(&pages->block_list);
-		long size_left = src_size;
-		struct mem_page_st *tmp = NULL;
-		long offset = 0;
-		while(size_left) {
-			tmp = kmalloc(sizeof(struct mem_page_st), GFP_KERNEL);
-			tmp->size = (size_left > CHUNK_SIZE)? CHUNK_SIZE: size_left;
-			tmp->data = kmalloc(tmp->size, GFP_KERNEL);
-			while(!tmp->data) {
-				tmp->size /=2;
-				if(tmp->size < PAGE_SIZE) {
-					pr_err("[ERROR] Failed to allocate memory.\n");
-					return -ENOMEM;
-				}
-				tmp->data = kmalloc(tmp->size, GFP_KERNEL);
-			}
-			if (copy_from_user(tmp->data, (void*)payload->src+offset, tmp->size)) {
-				pr_err("[ERROR] Failed to copy from user.\n");
-				return -EACCES;
-			}
-			list_add_tail(&tmp->list, &pages->block_list);
-			size_left -= tmp->size;
-			offset += tmp->size;
-			pages->block_num++;
-		}
-		
-		
-		sgs = kmalloc(sizeof(struct scatterlist *) * (2*pages->block_num), GFP_KERNEL);
-		if(!sgs) {
-			pr_err("Failed to allocate sgs memory\n");
-			return -ENOMEM;
-		}
-		sg = kmalloc(sizeof(struct scatterlist) * 2*pages->block_num, GFP_KERNEL);
-		if(!sgs) {
-			pr_err("Failed to allocate sg memory\n");
-			return -ENOMEM;
-		}
-		sg_init_one(&arg_sg, payload, sizeof(*payload));
-		sgs[num_out++] = &arg_sg;
-		int i = 0;
-		list_for_each_entry(tmp, &pages->block_list, list) {
-			sg_init_one(&sg[i], &tmp->size, sizeof(long));
-			sgs[num_out++] = &sg[i];
-			sg_init_one(&sg[i+1], tmp->data, tmp->size);
-			sgs[num_out++] = &sg[i+1];
-			i+=2;
-		}
-		arg->param = num_out;
-		#ifdef VIRTIO_LOCK
-		spin_lock(&port->io_lock);
-		#endif
-
-		send_sgs_to_virtio(port, sgs, num_out, 0);
-		#ifdef VIRTIO_LOCK
-		spin_unlock(&port->io_lock);
-		#endif
-
-		gldebug("[+] now analyse return buf\n");
-		gldebug("[+] arg->cmd = %d\n", payload->cmd);
-		put_user(payload->cmd, &arg->cmd);
-		
-	} else if(payload->flag == 2) {
-	// cudaMemcpyDeviceToHost
-		
-		#ifdef VIRTIO_LOCK
-		spin_lock(&port->io_lock);
-		#endif
-
-		ret = send_to_virtio(port, (void*)payload, ARG_SIZE);
-		#ifdef VIRTIO_LOCK
-		spin_unlock(&port->io_lock);
-		#endif
-
-		gldebug("[+] now analyse return buf\n");
-		gldebug("[+] arg->cmd = %d\n", payload->cmd);
-		put_user(payload->cmd, &arg->cmd);
-		if(!payload->param && src_size < KMALLOC_SIZE) {
-			copy_to_user((void __user *)payload->dst, h_mem, src_size);
-			kfree(h_mem);
-		}
-	} else if(payload->flag == 3) {
-	// cudaMemcpyDeviceToDevice 
-
-		#ifdef VIRTIO_LOCK
-		spin_lock(&port->io_lock);
-		#endif
-
-		ret = send_to_virtio(port, (void*)payload, ARG_SIZE);
-		#ifdef VIRTIO_LOCK
-		spin_unlock(&port->io_lock);
-		#endif
-
-		gldebug("[+] now analyse return buf\n");
-		gldebug("[+] arg->cmd = %d\n", payload->cmd);
-		put_user(payload->cmd, &arg->cmd);
-	} else if (payload->flag == 4){
-		// direction of the transfer is inferred from the pointer values.
-		
-	} else if (payload->flag == 0){
-HtoH:
-		gldebug("[+] cudaMemcpyHostToHost!\n");
-	} else {
-		pr_err("[+] should not be here!\n");
-	}
-RET:
-	kfree(payload);
-	return ret;
+	return 0;
 }
 
 int cuda_memcpy_async(VirtIOArg __user *arg, struct port *port)
@@ -2967,7 +2855,8 @@ int cuda_peek_at_last_error(VirtIOArg __user *arg, struct port *port)
 int cuda_set_device(VirtIOArg __user *arg, struct port *port)
 {
 	VirtIOArg *payload;
-	int ret;
+	struct scatterlist *sgs[1], arg_sg;
+	int num_out = 0, num_in = 0;
 
 	func();
 	payload = (VirtIOArg *)memdup_user(arg, ARG_SIZE);
@@ -2976,11 +2865,13 @@ int cuda_set_device(VirtIOArg __user *arg, struct port *port)
 		return -ENOMEM;
 	}
 	port->device = payload->flag;
+	sg_init_one(&arg_sg, payload, sizeof(*payload));
+	sgs[num_out++] = &arg_sg;
+
 	#ifdef VIRTIO_LOCK
 	spin_lock(&port->io_lock);
 	#endif
-
-	ret = send_to_virtio(port, (void*)payload, ARG_SIZE);
+	send_sgs_to_virtio(port, sgs, num_out, num_in);
 	#ifdef VIRTIO_LOCK
 	spin_unlock(&port->io_lock);
 	#endif
@@ -2989,7 +2880,7 @@ int cuda_set_device(VirtIOArg __user *arg, struct port *port)
 	gldebug("[+] arg->cmd = %d\n", payload->cmd);
 	put_user(payload->cmd, &arg->cmd);
 	kfree(payload);
-	return ret;
+	return 0;
 }
 
 int cuda_device_set_cache_config(VirtIOArg __user *arg, struct port *port)

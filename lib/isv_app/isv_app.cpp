@@ -351,7 +351,7 @@ static int open_vdevice()
         sprintf(devname, DEVICE_FILE, i);
         ctx->fd = open(devname, MODE);
         if(ctx->fd>= 0) {
-            sprintf(enclave_path, ENCLAVE_PATH, i);
+            sprintf(enclave_path, ENCLAVE_PATH);
             break;
         }
         else if(errno==EBUSY) {
@@ -459,16 +459,16 @@ static void format_size(long size)
 {
     long n=size;
     if(n>>30) {
-        printf(" %d GB\n", n>>30);
+        printf(" %ld GB\n", n>>30);
         return;
     } else if(n>>20) {
-        printf(" %d MB\n", n>>20);
+        printf(" %ld MB\n", n>>20);
         return;
     } else if(n>>10) {
-        printf(" %d KB\n", n>>10);
+        printf(" %ld KB\n", n>>10);
         return;
     } else {
-        printf(" %d B\n",  n);
+        printf(" %ld B\n",  n);
         return;
     }
 }
@@ -491,8 +491,10 @@ void my_library_fini(void)
 #endif
     close_vdevice();
     ctx_del();
+#ifdef VIRTIO_CUDA_DEBUG
     count_cuda_api();
     count_memcpy_size();
+#endif
 }
 
 static void get_mac(uint8_t *data, uint32_t size, uint8_t *payload_tag)
@@ -656,8 +658,10 @@ extern "C" void** __cudaRegisterFatBinary(void *fatCubin)
         // Note that fatcubin includes meta header and cubin data
         // meta header occupies first 0x50 bytes.
         CUmod_st *mod = mod_add((char*)binary->data+0x50);
+        #ifdef VIRTIO_CUDA_DEBUG
         dump_cuda_symbol(mod);
         dump_cuda_kernel(mod);
+        #endif
 
         // initialize arguments
         memset(&arg, 0, ARG_LEN);
@@ -697,12 +701,6 @@ extern "C" void** __cudaRegisterFatBinary(void *fatCubin)
         p_binary->size += size + sizeof(cubin_buf_t);
         p_binary->nr_binary++;
         debug("p_binary->size is %x\n", p_binary->size);
-        // send_to_device(VIRTIO_IOC_REGISTERFATBINARY, &arg);
-        // if(arg.cmd != cudaSuccess)
-        // {
-        //     error(" fatbin not registered\n");
-        //     exit(-1);
-        // }
         return fatCubinHandle;
     }
     else
@@ -716,6 +714,7 @@ extern "C" void __cudaUnregisterFatBinary(void **fatCubinHandle)
 {
     func();
     debug("fatcubinhandle %p\n", fatCubinHandle[0]);
+    mod_clear();
     return ;
 }
 
@@ -751,19 +750,19 @@ extern "C" void __cudaRegisterFunction(
         return;
 
     fatBinHeader = (computeFatBinaryFormat_t)(*fatCubinHandle);
-//  debug(" fatbin magic= 0x%x\n", fatBinHeader->magic);
-//  debug(" fatbin version= %d\n", fatBinHeader->version);
-//  debug(" fatbin headerSize= 0x%x\n", fatBinHeader->headerSize);
-//  debug(" fatbin fatSize= 0x%llx\n", fatBinHeader->fatSize);
     debug(" fatCubinHandle = %p, value =%p\n", fatCubinHandle, fatCubinHandle[0]);
-    debug(" hostFun = %s, value =%p\n", hostFun, hostFun);
-    debug(" deviceFun =%s, %p\n", deviceFun, deviceFun);
-    debug(" deviceName = %s\n", deviceName);
-    debug(" thread_limit = %d\n", thread_limit);
-    debug(" tid = {%d, %d, %d} \n", tid?tid->x:0, tid?tid->y:0, tid?tid->z:0);
-    debug(" bid = {%d, %d, %d} \n", bid?bid->x:0, bid?bid->y:0, bid?bid->z:0);
-    debug(" bDim = {%d, %d, %d} \n", bDim?bDim->x:0, bDim?bDim->y:0, bDim?bDim->z:0);
-    debug(" gDim = {%d, %d, %d} \n", gDim?gDim->x:0, gDim?gDim->y:0, gDim?gDim->z:0);
+    debug(" fatbin magic= 0x%x\n", fatBinHeader->magic);
+    debug(" fatbin version= %d\n", fatBinHeader->version);
+    debug(" fatbin headerSize= 0x%x\n", fatBinHeader->headerSize);
+    debug(" fatbin fatSize= 0x%llx\n", fatBinHeader->fatSize);
+    debug(" \thostFun = %s, value =%p\n", hostFun, hostFun);
+    debug(" \tdeviceFun =%s, %p\n", deviceFun, deviceFun);
+    debug(" \tdeviceName = %s\n", deviceName);
+    debug(" \tthread_limit = %d\n", thread_limit);
+    debug(" \ttid = {%d, %d, %d} \n", tid?tid->x:0, tid?tid->y:0, tid?tid->z:0);
+    debug(" \tbid = {%d, %d, %d} \n", bid?bid->x:0, bid?bid->y:0, bid?bid->z:0);
+    debug(" \tbDim = {%d, %d, %d} \n", bDim?bDim->x:0, bDim?bDim->y:0, bDim?bDim->z:0);
+    debug(" \tgDim = {%d, %d, %d} \n", gDim?gDim->x:0, gDim?gDim->y:0, gDim?gDim->z:0);
     buf_size = (uint32_t)(strlen(deviceName)+1);
 
     struct CUfunc_st* func;
@@ -800,12 +799,6 @@ extern "C" void __cudaRegisterFunction(
     debug("p_binary->size = %x\n", p_binary->size);
     debug("last binary nr_func = %x\n", p_last_binary->nr_func);
     p_last_binary->nr_func += 1;
-    // send_to_device(VIRTIO_IOC_REGISTERFUNCTION, &arg);
-    // if(arg.cmd != cudaSuccess)
-    // {
-    //     error(" functions are not registered successfully.\n");
-    //     exit(-1);
-    // }
     return;
 }
 
@@ -875,11 +868,6 @@ extern "C" void __cudaRegisterVar(
     memcpy(p_var->buf, deviceName, buf_size);
     p_binary->size += buf_size + sizeof(var_buf_t);
     p_last_binary->nr_var += 1;
-    // send_to_device(VIRTIO_IOC_REGISTERVAR, &arg);
-    // if(arg.cmd != cudaSuccess)
-    // {
-    //     error(" functions are not registered successfully.\n");
-    // }
 }
 
 /*extern "C" void __cudaRegisterManagedVar(
@@ -924,12 +912,19 @@ extern "C" void __cudaRegisterVar(
     debug("Undefined\n");
 }*/
 
+
+/*
+    CUDA10
+*/
 extern "C" char __cudaInitModule(void **fatCubinHandle)
 {
     func();
     return 'U';
 }
 
+/*
+    CUDA10
+*/
 extern "C" unsigned  __cudaPushCallConfiguration(
     dim3 gridDim,
     dim3 blockDim, 
@@ -951,6 +946,9 @@ extern "C" unsigned  __cudaPushCallConfiguration(
     return 0;
 }
 
+/*
+    CUDA10
+*/
 extern "C" cudaError_t  __cudaPopCallConfiguration(
     dim3         *gridDim,
     dim3         *blockDim,
@@ -967,7 +965,7 @@ extern "C" cudaError_t  __cudaPopCallConfiguration(
 }
 
 /*
-CUDA10
+    CUDA10
 */
 extern "C" cudaError_t cudaLaunchKernel(
     const void *hostFunc,
@@ -1056,11 +1054,10 @@ extern "C" cudaError_t cudaLaunchKernel(
     arg.tid     = (uint32_t)syscall(SYS_gettid);
     send_to_device(VIRTIO_IOC_LAUNCH_KERNEL, &arg);
     return (cudaError_t)arg.cmd;
-    return cudaSuccess;
 }
 
 /*
-CUDA9
+    CUDA9
 */
 extern "C" cudaError_t cudaConfigureCall(
     dim3 gridDim, dim3 blockDim, size_t sharedMem, cudaStream_t stream)
@@ -1086,7 +1083,7 @@ extern "C" cudaError_t cudaConfigureCall(
 }
 
 /*
-CUDA9
+    CUDA9
 */
 extern "C" cudaError_t cudaSetupArgument(const void* arg, size_t size, size_t offset)
 {
@@ -1109,6 +1106,9 @@ extern "C" cudaError_t cudaSetupArgument(const void* arg, size_t size, size_t of
     return cudaSuccess;
 }
 
+/*
+    CUDA9
+*/
 extern "C" cudaError_t cudaLaunch(const void *entry)
 {
     VirtIOArg arg;
@@ -1187,7 +1187,7 @@ extern "C" cudaError_t cudaMemcpy(void *dst, const void *src, size_t count, enum
 }
 
 extern "C" cudaError_t cudaMemcpyToSymbol( const void *symbol, const void *src, 
-                                size_t count, size_t offset, enum cudaMemcpyKind kind)
+                        size_t count, size_t offset, enum cudaMemcpyKind kind)
 {
     VirtIOArg arg;
     func();
@@ -1203,7 +1203,7 @@ extern "C" cudaError_t cudaMemcpyToSymbol( const void *symbol, const void *src,
     arg.srcSize = (uint32_t)count;
     debug("symbol is %p\n", symbol);
     arg.dst     = (uint64_t)symbol;
-    arg.dstSize = 0;
+    arg.dstSize = (uint32_t)count;
     arg.param   = offset;
     arg.tid     = (uint32_t)syscall(SYS_gettid);
     send_to_device(VIRTIO_IOC_MEMCPYTOSYMBOL, &arg);
@@ -1211,7 +1211,7 @@ extern "C" cudaError_t cudaMemcpyToSymbol( const void *symbol, const void *src,
 }
 
 extern "C" cudaError_t cudaMemcpyFromSymbol(   void *dst, const void *symbol, 
-                                    size_t count, size_t offset, enum cudaMemcpyKind kind)
+                        size_t count, size_t offset, enum cudaMemcpyKind kind)
 {
     VirtIOArg arg;
     func();
@@ -1225,6 +1225,7 @@ extern "C" cudaError_t cudaMemcpyFromSymbol(   void *dst, const void *symbol,
     arg.flag    = kind;
     debug("symbol is %p\n", symbol);
     arg.src     = (uint64_t)symbol;
+    arg.srcSize = (uint32_t)count;
     arg.dst     = (uint64_t)dst;
     arg.dstSize = (uint32_t)count;
     arg.param   = (uint64_t)offset;
