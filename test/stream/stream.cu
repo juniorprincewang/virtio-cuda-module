@@ -5,7 +5,6 @@ __global__ void kernel(float *g_data, float value)
 {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     g_data[idx] = g_data[idx] + value;
-    printf("%f+g_data[%d]=%f\n", value, idx, g_data[idx]);
 }
 
 int checkResult(float *data, const int n, const float x)
@@ -25,15 +24,14 @@ int checkResult(float *data, const int n, const float x)
 
 int main()
 {
-	int *d_a;
-	int *a;
-	dim3 threads(10,1);
-	dim3 blocks(1,1);
-	int nstreams = 5;
-	int i;
-	int nreps = 10000;
-    int num = 1 << 22;
+	float *d_a;
+	float *h_a;
+	int nstreams = 2;
+	int i,j;
+	int nreps = 10;
+    int num = 1 << 10;
     int nbytes = num * sizeof(float);
+    float value = 16;
 	// create CUDA event handles
     // use blocking sync
     cudaEvent_t start_event, stop_event;
@@ -49,20 +47,24 @@ int main()
         cudaStreamCreate(&(streams[i]));
     }
 
+    h_a=(float*)malloc(nbytes);
+    memset(h_a, 0, nbytes);
 
-	dim3 block = dim3(4);
+	dim3 block = dim3(32,1,1);
     dim3 grid  = dim3((num + block.x - 1) / block.x);
 
-	cudaMalloc((void**)&d_a, sizeof(int)*2);
-	cudaMemcpyAsync(d_a, a, sizeof(int)*2, cudaMemcpyHostToDevice, streams[0]);
-	printf("a[0] = %d, a[1] = %d\n", a[0], a[1]);
+	cudaMalloc((void**)&d_a, nbytes);
 
+	// cudaMemcpyAsync(d_a, a, sizeof(float)*2, cudaMemcpyHostToDevice, streams[0]);
+    cudaMemcpy(d_a, h_a, nbytes, cudaMemcpyHostToDevice);
 	cudaEventCreate(&start_event);
 	cudaEventCreate(&stop_event);
 	// start
 	cudaEventRecord(start_event, 0);
 	for (i = 0; i < nreps; i++) {
-		kernel<<<grid, block, 0, streams[0]>>>(d_a);
+        for (j=0; j<nstreams; j++) {
+		  kernel<<<grid, block, 0, streams[j]>>>(d_a, value);
+        }
 	}
 	// end
 	cudaEventRecord(stop_event, 0);
@@ -70,9 +72,10 @@ int main()
     cudaEventElapsedTime(&elapsed_time, start_event, stop_event);
     printf("non-streamed:\t%.2f\n", elapsed_time / nreps);
 
-	cudaMemcpy(a, d_a, sizeof(int)*2, cudaMemcpyDeviceToHost);
-	printf("a[0] = %d, a[1] = %d\n", a[0], a[1]);
+	cudaMemcpy(h_a, d_a, nbytes, cudaMemcpyDeviceToHost);
 
+    int bFinalResults = checkResult(h_a, num, nstreams * nreps * value);
+    printf("result:%s\n", bFinalResults? "PASS" : "FAILED");
     // release resources
     for (i = 0; i < nstreams; i++)
     {
@@ -82,5 +85,6 @@ int main()
 	cudaEventDestroy(start_event);
 	cudaEventDestroy(stop_event);
 	cudaFree(d_a);
+    free(h_a);
 	return 0;
 }

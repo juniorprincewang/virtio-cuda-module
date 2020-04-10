@@ -213,21 +213,27 @@ static void destroy_all_symbols(struct CUmod_st *mod)
 
 static void destroy_all_functions(struct CUmod_st *mod)
 {
-/*	struct CUfunc_st *func, *func2;
+	struct CUfunc_st *func, *func2;
 	struct cuda_raw_func *raw_func;
 	struct cuda_param *param_data;
-	struct list_head *p;
-	list_for_each_entry_safe(func, func2, &mod->func_list, list_entry) {
-		list_del(&func->list_entry);
-		raw_func = &func->raw_func;
-		while (raw_func->param_data) {
-			param_data = raw_func->param_data;
-			raw_func->param_data = raw_func->param_data->next;
-			free(param_data);
+	struct list_head *p, *head;
+
+	head = &mod->func_list;
+	while(!list_empty(head)) {
+		p = head->next;
+		list_del(p);
+		func = list_container(p);
+		if(func) {
+			raw_func = &func->raw_func;
+			while (raw_func->param_data) {
+				param_data = raw_func->param_data;
+				raw_func->param_data = raw_func->param_data->next;
+				free(param_data);
+			}
+			free(raw_func->name);
+			free(func);
 		}
-		free(raw_func->name);
-		free(func);
-	}*/
+	}
 }
 
 
@@ -308,7 +314,7 @@ void dump_kernel(struct CUmod_st *mod)
     printf("\n");
 }
 
-static void init_mod(struct CUmod_st *mod, char *bin)
+static void init_mod(struct CUmod_st *mod, const char *bin)
 {
 	int i;
 
@@ -323,7 +329,6 @@ static void init_mod(struct CUmod_st *mod, char *bin)
 	}
 	list_head_init(&mod->func_list, NULL);
 	list_head_init(&mod->symbol_list, NULL);
-	mod->arch = 0;
 }
 
 static void init_raw_func(struct cuda_raw_func *f)
@@ -373,7 +378,7 @@ static struct CUfunc_st* malloc_func_if_necessary(struct CUmod_st *mod, const ch
 	return func;
 }
 
-static int load_cubin(struct CUmod_st *mod, char *bin)
+static int load_cubin(struct CUmod_st *mod, const char *bin)
 {
 	Elf_Ehdr *ehead;
 	Elf_Shdr *sheads;
@@ -381,10 +386,10 @@ static int load_cubin(struct CUmod_st *mod, char *bin)
 	Elf_Sym *symbols, *sym;
 	char *strings;
 	char *shstrings;
-	char *nvinfo, *nvrel, *nvglobal_init;
+	char *nvinfo, *nvrel;
 	uint32_t symbols_size;
 	int symbols_idx, strings_idx;
-	int nvinfo_idx, nvrel_idx, nvrel_const_idx,	nvglobal_idx, nvglobal_init_idx;
+	int nvinfo_idx, nvrel_idx, nvrel_const_idx,	nvglobal_idx;
 	symbol_entry_t *sym_entry;
 	section_entry_t *se;
 	void *sh;
@@ -403,14 +408,12 @@ static int load_cubin(struct CUmod_st *mod, char *bin)
 	strings = NULL;
 	nvinfo = NULL;
 	nvrel = NULL;
-	nvglobal_init = NULL;
 	symbols_idx = 0;
 	strings_idx = 0;
 	nvinfo_idx = 0;
 	nvrel_idx = 0;
 	nvrel_const_idx = 0;
 	nvglobal_idx = 0;
-	nvglobal_init_idx = 0;
 	shstrings = bin + sheads[ehead->e_shstrndx].sh_offset;
 
 	/* seek the ELF header. */
@@ -478,13 +481,6 @@ static int load_cubin(struct CUmod_st *mod, char *bin)
 				if (!func)
 					goto fail_malloc_func;
 				func->raw_func.shared_size = sheads[i].sh_size;
-				/*
-				 * int x;
-				 * for (x = 0; x < raw_func->shared_size/4; x++) {
-				 * 		unsigned long *data = bin + sheads[i].sh_offset;
-				 *		printf("0x%x: 0x%x\n", x*4, data[x]);
-				 * }
-				 */
 			}
 			else if (!strncmp(sh_name, SH_LOCAL, strlen(SH_LOCAL))) {
 				struct CUfunc_st *func = NULL;
@@ -531,26 +527,8 @@ static int load_cubin(struct CUmod_st *mod, char *bin)
 				symbols_size = sheads[i].sh_size;
 				nvglobal_idx = i;
 			}
-			else if (!strcmp(sh_name, SH_GLOBAL_INIT)) {
-				nvglobal_init_idx = i;
-				nvglobal_init = (char *) sh;
-			}
 			break;
 		}
-	}
-
-	/* nv.rel... "__device__" symbols? */
-	for (sym_entry = (symbol_entry_t *)nvrel; 
-		 (void *)sym_entry < (void *)nvrel + sheads[nvrel_idx].sh_size;
-		 sym_entry++) {
-		/*
-		 char *sym_name, *sh_name;
-		 uint32_t size;
-		 sym  = &symbols[se->sym_idx];
-		 sym_name = strings + sym->st_name;
-		 sh_name = strings + sheads[sym->st_shndx].sh_name;
-		 size = sym->st_size;
-		*/
 	}
 
 	/* symbols: __constant__ variable and built-in function names. */
@@ -599,35 +577,6 @@ static int load_cubin(struct CUmod_st *mod, char *bin)
 			 goto fail_symbol;
 		 }
 	}
-	if (nvinfo) { /* >= sm_20 */
-		/* parse nv.info sections. */
-		pos = (char*)nvinfo;
-		while (pos < nvinfo + sheads[nvinfo_idx].sh_size) {
-			section_entry_t *e = (section_entry_t*) pos;
-			switch (e->type) {
-			case 0x0704: /* texture */
-				cubin_func_skip(&pos, e);
-				break;
-			case 0x1104:  /* function */
-				cubin_func_skip(&pos, e);
-				break;
-			case 0x1204: /* some counters but what is this? */
-				cubin_func_skip(&pos, e);
-				break;
-			case 0x2304: /*sm 35 unknow*/
-				cubin_func_skip(&pos, e);
-				break;
-			default:
-				cubin_func_unknown(&pos, e);
-				/* goto fail_function; */
-			}
-		}
-		mod->arch = CUDA_ARCH_SM_2X;
-	}
-	else { /* < sm_13 */
-		mod->arch = CUDA_ARCH_SM_1X;
-	}
-
 	return 0;
 
 fail_symbol:
@@ -641,6 +590,8 @@ fail_malloc_func:
 static void unload_cubin(struct CUmod_st *mod)
 {
 	if (mod->bin) {
+		destroy_all_functions(mod);
+		destroy_all_symbols(mod);
 		free(mod->bin);
 		mod->bin = NULL;
 	}
@@ -686,6 +637,12 @@ int cuda_load_cubin(struct CUmod_st *mod, const char *bin)
 		return 1;
 	}
 	return 0;
+}
+
+void cuda_unload_cubin(struct CUmod_st *mod)
+{
+	if(mod)
+		unload_cubin(mod);
 }
 
 int cuda_load_cubin_file(struct CUmod_st *mod, const char *fname)

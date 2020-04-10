@@ -93,6 +93,7 @@ enum API_TYPE{
 #define VIRTIO_CUDA_EVENTQUERY 					42
 #define VIRTIO_CUDA_PRIMARYCONTEXT 				43
 #define VIRTIO_CUDA_DEVICESETCACHECONFIG 		44
+#define VIRTIO_CUDA_GETDEVICEFLAGS				45
 //-------------------------------------
 #define VIRTIO_CUDA_MEMCPY_HTOD					50
 #define VIRTIO_CUDA_MEMCPY_DTOH					51
@@ -166,17 +167,6 @@ struct mem_page_st {
 
 #endif //KERNEL
 
-
-
-//for crypto_data_header, if these is no openssl header
-#ifndef RSA_PKCS1_PADDING
-
-#define RSA_PKCS1_PADDING	1
-#define RSA_SSLV23_PADDING	2
-#define RSA_NO_PADDING		3
-#define RSA_PKCS1_OAEP_PADDING	4
-
-#endif
 /*
  * function arguments
 */
@@ -195,6 +185,9 @@ typedef struct VirtIOArg
 	uint32_t paramSize;
 	uint64_t param2;
 	uint32_t nr_elem;
+	uint64_t stream;
+	uint64_t event;
+	uint64_t event2;
 	uint8_t  mac[16];
 } VirtIOArg;
 
@@ -303,6 +296,8 @@ typedef struct VirtIOArg
 	_IOWR(VIRTIO_IOC_ID,43,VirtIOArg)
 #define VIRTIO_IOC_DEVICESETCACHECONFIG \
 	_IOWR(VIRTIO_IOC_ID,44,VirtIOArg)
+#define VIRTIO_IOC_GETDEVICEFLAGS \
+	_IOWR(VIRTIO_IOC_ID,45,VirtIOArg)
 // ----------------------------------
 #define VIRTIO_IOC_MEMCPY_HTOD \
 	_IOWR(VIRTIO_IOC_ID,50,VirtIOArg)
