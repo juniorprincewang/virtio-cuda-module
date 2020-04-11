@@ -8,9 +8,6 @@
 #include "list.h"
 #include <cuda.h>
 
-#define CUDA_ARCH_SM_1X 0x50 /* sm_1x */
-#define CUDA_ARCH_SM_2X 0xc0 /* sm_2x */
-#define CUDA_ARCH_SM_3X 0xe0 /* sm_3x */
 
 #define Elf_Ehdr Elf64_Ehdr
 #define Elf_Shdr Elf64_Shdr
@@ -134,7 +131,6 @@ struct CUmod_st {
 	uint32_t symbol_count;
 	struct list_head func_list;
 	struct list_head symbol_list;
-	int arch;
 	struct CUmod_st *next;
 };
 
@@ -147,11 +143,11 @@ struct CUfunc_st {
 
 struct CUctx_st {
 	int fd; // fd of device file
+	CUresult result;
 	int primary_context_initialized;
 	CUcontext ctx;
 	uint32_t nr_mod;
 	struct CUmod_st *head_mod;
-	struct CUmod_st *cur_mod;
 };
 
 struct CUkernel_st {
@@ -170,6 +166,7 @@ struct CUkernel_st {
 
 int cuda_load_cubin_file(struct CUmod_st *mod, const char *fname);
 int cuda_load_cubin(struct CUmod_st *mod, const char *bin);
+void cuda_unload_cubin(struct CUmod_st *mod);
 struct CUfunc_st* lookup_func_by_name(struct CUmod_st *mod, const char *name);
 struct CUfunc_st* lookup_func_by_hostfunc(struct CUmod_st *mod, const void *host_func);
 struct cuda_const_symbol* lookup_symbol_by_name(struct CUmod_st *mod, const char *name);

@@ -34,7 +34,7 @@ int main(void)
     cudaMemcpyToSymbol(dfactor, &factor, sizeof(float), 0, cudaMemcpyHostToDevice);
     cudaMemcpyFromSymbol(&h_factor, dfactor, sizeof(float), 0, cudaMemcpyDeviceToHost);
     printf("host factor = %f\n", h_factor);
-    return 0;
+    
     float *da;
     float ha=0;
     
