@@ -7,8 +7,6 @@
 #define KMALLOC_SHIFT 13
 #define KMALLOC_SIZE (1UL<<KMALLOC_SHIFT)
 
-
-
 enum API_TYPE{
     API_OTHER,     // 0
     API_KERNEL,    // 1

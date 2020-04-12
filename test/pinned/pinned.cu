@@ -30,18 +30,9 @@ int checkResult(int *data, const int n, const int x)
 
     return 1;
 }
- 
-int main(void) {  
-    // int ns = 1<<8;
-    int ns = 1<<3;
-    int data_size = ns * sizeof(int);
-    int * host_p;
-    int * host_p2;
-    int * host_result;
-    int * dev_p;
-    int value = 10;
-    dim3 block, grid;
-    size_t page_size = 0;
+
+void test_hostregister()
+{
     int * h_p1;
     int * h_p2;
     int * h_p3;
@@ -60,7 +51,36 @@ int main(void) {
         cudaHostRegister(h_p2, n, cudaHostRegisterDefault) );
     checkCudaErrors(
         cudaHostRegister(h_p3, n, cudaHostRegisterDefault) );
+    checkCudaErrors( cudaHostUnregister(h_p1) );
+    checkCudaErrors( cudaHostUnregister(h_p2) );
+    checkCudaErrors( cudaHostUnregister(h_p3) );
+    free(h_p1);
+    free(h_p2);
+    free(h_p3);
+}
 
+void test_hostalloc()
+{
+    int ns = 1<<20;
+    int data_size = ns * sizeof(int);
+    int * host_p;
+    checkCudaErrors(
+        cudaHostAlloc((void**)&host_p, data_size, cudaHostAllocDefault) );
+    checkCudaErrors( cudaFreeHost(host_p) );
+}
+
+int main(void) {  
+    int ns = 1<<18;
+    // int ns = 1<<3;
+    int data_size = ns * sizeof(int);
+    int * host_p;
+    int * host_p2;
+    int * host_result;
+    int * dev_p;
+    int value = 10;
+    dim3 block, grid;
+    size_t page_size = 0;
+    
     page_size = sysconf(_SC_PAGE_SIZE);
     printf("Page size is 0x%lx\n", page_size);
     printf("Allocate data size 0x%x\n", data_size);
@@ -87,7 +107,7 @@ int main(void) {
       
     /* Now launch the kernel... */
     // set kernel launch configuration
-    block = dim3(2);
+    block = dim3(16);
     grid  = dim3((ns + block.x - 1) / block.x);
     kernel<<<grid, block>>>(dev_p, value);
     checkCudaErrors(cudaGetLastError());
@@ -106,11 +126,6 @@ int main(void) {
     checkCudaErrors( cudaFreeHost(host_p) );
     checkCudaErrors( cudaFreeHost(host_p2) );
     checkCudaErrors( cudaFreeHost(host_result) );
-    checkCudaErrors( cudaHostUnregister(h_p1) );
-    checkCudaErrors( cudaHostUnregister(h_p2) );
-    checkCudaErrors( cudaHostUnregister(h_p3) );
-    free(h_p1);
-    free(h_p2);
-    free(h_p3);
+    
     return 0;
 }

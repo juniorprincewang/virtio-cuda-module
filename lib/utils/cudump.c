@@ -382,15 +382,12 @@ static int load_cubin(struct CUmod_st *mod, const char *bin)
 {
 	Elf_Ehdr *ehead;
 	Elf_Shdr *sheads;
-	Elf_Phdr *pheads;
 	Elf_Sym *symbols, *sym;
 	char *strings;
 	char *shstrings;
-	char *nvinfo, *nvrel;
-	uint32_t symbols_size;
-	int symbols_idx, strings_idx;
-	int nvinfo_idx, nvrel_idx, nvrel_const_idx,	nvglobal_idx;
-	symbol_entry_t *sym_entry;
+	char *nvrel;
+	int symbols_idx;
+	int nvrel_const_idx,	nvglobal_idx;
 	section_entry_t *se;
 	void *sh;
 	char *sh_name;
@@ -403,15 +400,10 @@ static int load_cubin(struct CUmod_st *mod, const char *bin)
 	/* initialize ELF variables. */
 	ehead = (Elf_Ehdr *)bin;
 	sheads = (Elf_Shdr *)(bin + ehead->e_shoff);
-	pheads = (Elf_Phdr *)(bin + ehead->e_phoff);
 	symbols = NULL;
 	strings = NULL;
-	nvinfo = NULL;
 	nvrel = NULL;
 	symbols_idx = 0;
-	strings_idx = 0;
-	nvinfo_idx = 0;
-	nvrel_idx = 0;
 	nvrel_const_idx = 0;
 	nvglobal_idx = 0;
 	shstrings = bin + sheads[ehead->e_shstrndx].sh_offset;
@@ -427,11 +419,9 @@ static int load_cubin(struct CUmod_st *mod, const char *bin)
 			symbols = (Elf_Sym *)sh;
 			break;
 		case SHT_STRTAB: /* string table */
-			strings_idx = i;
 			strings = (char *)sh;
 			break;
 		case SHT_REL: /* relocatable: not sure if nvcc uses it... */
-			nvrel_idx = i;
 			nvrel = (char *)sh;
 			sscanf(sh_name, "%*s%d", &nvrel_const_idx);
 			break;
@@ -519,12 +509,9 @@ static int load_cubin(struct CUmod_st *mod, const char *bin)
 				}
 			}
 			else if (!strcmp(sh_name, SH_INFO)) {
-				nvinfo_idx = i;
-				nvinfo = (char *) sh;
 			}
 			else if (!strcmp(sh_name, SH_GLOBAL)) {
 				/* symbol space size. */
-				symbols_size = sheads[i].sh_size;
 				nvglobal_idx = i;
 			}
 			break;
@@ -589,12 +576,9 @@ fail_malloc_func:
 
 static void unload_cubin(struct CUmod_st *mod)
 {
-	if (mod->bin) {
-		destroy_all_functions(mod);
-		destroy_all_symbols(mod);
-		free(mod->bin);
-		mod->bin = NULL;
-	}
+	destroy_all_functions(mod);
+	destroy_all_symbols(mod);
+	mod->bin = NULL;
 }
 
 static int load_file(char **pbin, const char *fname)

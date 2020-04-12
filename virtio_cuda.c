@@ -255,6 +255,7 @@ struct virtio_uvm_page{
 	struct list_head list;
 	struct list_head block_list;
 	uint64_t data;
+	uint32_t is_mmap;
 };
 
 /* This struct holds the per-port data */
@@ -1212,6 +1213,17 @@ static struct virtio_uvm_page *find_page_by_addr(unsigned long addr,
 	return NULL;
 }
 
+static struct virtio_uvm_page *find_pages_by_addr(unsigned long addr, 
+													struct list_head *head)
+{
+	struct virtio_uvm_page *page;
+	list_for_each_entry(page, head, list) {
+		if(page->uvm_start <= addr && addr < page->uvm_end)
+			return page;
+	}
+	return NULL;
+}
+
 static unsigned long *find_gpa_array_start_addr(uint64_t addr, size_t size, 
 				struct port *port, uint32_t *offset_ret, uint32_t *blocks_ret)
 {
@@ -1831,63 +1843,14 @@ int cuda_launch_kernel(VirtIOArg __user *arg, struct port *port)
 
 static int cuda_malloc(VirtIOArg __user *arg, struct port *port)
 {
-	VirtIOArg *payload;
-	struct scatterlist *sgs[1], arg_sg;
 	func();
-	
-	payload = (VirtIOArg *)memdup_user(arg, ARG_SIZE);
-	if(!payload) {
-		pr_err("[ERROR] can not malloc 0x%lx memory\n", ARG_SIZE);
-		return -ENOMEM;
-	}
-	sg_init_one(&arg_sg, payload, sizeof(*payload));
-	sgs[0] = &arg_sg;
-	#ifdef VIRTIO_LOCK
-	spin_lock(&port->io_lock);
-	#endif
-	send_sgs_to_virtio(port, sgs, 1, 0);
-	#ifdef VIRTIO_LOCK
-	spin_unlock(&port->io_lock);
-	#endif
-
-	gldebug("[+] now analyse return buf\n");
-	gldebug("[+] arg->cmd = %d\n", payload->cmd);
-	gldebug("[+] arg->dst = 0x%llx\n", payload->dst);
-	put_user(payload->cmd, &arg->cmd);
-	put_user(payload->dst, &arg->dst);
-	kfree(payload);
-	return 0;
+	return send_single_payload(arg, port);
 }
 
 static int cuda_free(VirtIOArg __user *arg, struct port *port)
 {
-	VirtIOArg *payload;
-	struct scatterlist *sgs[1], arg_sg;
 	func();
-
-	payload = (VirtIOArg *)memdup_user(arg, ARG_SIZE);
-	if(!payload) {
-		pr_err("[ERROR] can not malloc 0x%lx memory\n", ARG_SIZE);
-		return -ENOMEM;
-	}
-	gldebug("[+] arg->src = 0x%llx\n", payload->src);
-
-	sg_init_one(&arg_sg, payload, sizeof(*payload));
-	sgs[0] = &arg_sg;
-
-	#ifdef VIRTIO_LOCK
-	spin_lock(&port->io_lock);
-	#endif
-	send_sgs_to_virtio(port, sgs, 1, 0);
-	#ifdef VIRTIO_LOCK
-	spin_unlock(&port->io_lock);
-	#endif
-
-	gldebug("[+] now analyse return buf\n");
-	gldebug("[+] arg->cmd = %d\n", payload->cmd);
-	put_user(payload->cmd, &arg->cmd);
-	kfree(payload);
-	return 0;
+	return send_single_payload(arg, port);
 }
 
 int cuda_malloc_host(VirtIOArg __user *arg, struct port *port)
@@ -1991,15 +1954,22 @@ int cuda_munmapctl(VirtIOArg __user *arg, struct port *port)
 	return ret;
 }
 
-int cuda_host_register(VirtIOArg __user *arg, struct port *port)
+static int cuda_host_register(VirtIOArg __user *arg, struct port *port)
 {
 	// TO FIX
 	VirtIOArg *payload;
-	int ret;
 	uint32_t src_size;
-	GMOL *mol;
-	struct virtio_uvm_page *pages;
+	struct scatterlist **sgs, *sg, arg_sg;
+	int num_out = 0, num_in = 0;
+	struct page ** page_list;
+	int nr_pages=0;
+	int start_idx, end_idx;
+	unsigned long pg_offset_start, pg_offset_end;
+	int i = 0;
+	struct virtio_uvm_page *pages= NULL;
+	struct mem_page_st *tmp = NULL;
 
+	
 	func();
 	payload = (VirtIOArg *)memdup_user(arg, ARG_SIZE);
 	if(!payload) {
@@ -2007,44 +1977,87 @@ int cuda_host_register(VirtIOArg __user *arg, struct port *port)
 		return -ENOMEM;
 	}
 	src_size = payload->srcSize;
-	payload->param = 1;
-	if(!find_page_by_addr(payload->src, port)) {
-		gldebug("mmap address 0x%llx size 0x%x memory\n", payload->src, src_size);
-		payload->param = 0;
-		// if(src_size >= KMALLOC_SIZE) {
-			pages = uvirt_to_phys_pages((unsigned long __user)payload->src, src_size, 1);
-			if(!pages) {
-				pr_err("[ERROR] Failed to mmap\n");
-				return -ENOMEM;
-			}
-			payload->dst  		= (uint64_t)virt_to_phys(pages->blocks);
-			payload->dstSize 	= (uint32_t)pages->block_num;
-			mol 	 	= kmalloc(sizeof(GMOL), GFP_KERNEL);
-			mol->uaddr 	= payload->src;
-			mol->kaddr 	= (uint64_t)pages;
-			mol->size 	= src_size;
-			list_add(&mol->list, &port->guest_mem_list);
+	pages = find_pages_by_addr(payload->src, &port->page);
+	if(!pages) {
+		gldebug("No such addr 0x%llx with size 0x%x\n", payload->src, src_size);
+		nr_pages = page_nr(payload->src, src_size);
+		pg_offset_start = offset_in_page(payload->src);
+		pg_offset_end = offset_in_page(payload->src+src_size);
+		gldebug("nr pages 0x%x, size 0x%x, page offset start 0x%lx, page offset end 0x%lx\n", 
+				nr_pages, src_size, pg_offset_start, pg_offset_end);
+		pages = kmalloc(sizeof(struct virtio_uvm_page),GFP_KERNEL);
+		list_add_tail(&pages->list, &port->page);
+		pages->uvm_start = payload->src;
+		pages->uvm_end 	= payload->src + src_size;
+		pages->block_num = 0;
+		pages->is_mmap = 0;
+		INIT_LIST_HEAD(&pages->block_list);
+		page_list = uaddr_to_pages(payload->src, src_size, 0);
+		start_idx=0;
+		end_idx = nr_pages-1;
+		for(i=0; i<nr_pages; i++) {
+			char *va = page_address(page_list[i]);
+			unsigned start=0, end=PAGE_SIZE;
+			if(i == start_idx)
+				start = pg_offset_start;
+			if(i == end_idx)
+				end = pg_offset_end;
+			tmp = kmalloc(sizeof(struct mem_page_st), GFP_KERNEL);
+			tmp->data = va + start;
+			tmp->size = end-start;
+			list_add_tail(&tmp->list, &pages->block_list);
+			pages->block_num++;
+		}
+	} else {
+		gldebug("Found addr 0x%llx\n", payload->src);
 	}
-	#ifdef VIRTIO_LOCK
-	spin_lock(&port->io_lock);
-	#endif
+	
+	sgs = kmalloc(sizeof(struct scatterlist *) * (1+pages->block_num), GFP_KERNEL);
+	if(!sgs) {
+		pr_err("Failed to allocate sgs memory\n");
+		return -ENOMEM;
+	}
+	sg = kmalloc(sizeof(struct scatterlist) * pages->block_num, GFP_KERNEL);
+	if(!sg) {
+		pr_err("Failed to allocate sg memory\n");
+		return -ENOMEM;
+	}
+	sg_init_one(&arg_sg, payload, sizeof(*payload));
+	sgs[num_out++] = &arg_sg;
+	i = 0;
+	list_for_each_entry(tmp, &pages->block_list, list) {
+		sg_init_one(&sg[i], tmp->data, tmp->size);
+		sgs[num_out++] = &sg[i];
+		i++;
+	}
+	payload->param = pages->block_num;
+	payload->nr_elem = num_out + num_in;
 
-	ret = send_to_virtio(port, (void *)payload, ARG_SIZE);
-	#ifdef VIRTIO_LOCK
+#ifdef VIRTIO_LOCK
+	spin_lock(&port->io_lock);
+#endif
+	send_sgs_to_virtio(port, sgs, num_out, num_in);
+#ifdef VIRTIO_LOCK
 	spin_unlock(&port->io_lock);
-	#endif
+#endif
 
 	gldebug("[+] now analyse return buf\n");
 	gldebug("[+] arg->cmd = %d\n", payload->cmd);
 	put_user(payload->cmd, &arg->cmd);
+	kfree(sg);
+	kfree(sgs);
 	kfree(payload);
-	return ret;
+	return 0;
 }
 
 int cuda_host_unregister(VirtIOArg __user *arg, struct port *port)
 {
 	VirtIOArg *payload;
-	int ret;
+	struct scatterlist **sgs, *sg, arg_sg;
+	int num_out = 0, num_in = 0;
+	int i = 0;
+	struct virtio_uvm_page *pages= NULL;
+	struct mem_page_st *tmp = NULL, *tmp2=NULL;
 	
 	func();
 	payload = (VirtIOArg *)memdup_user(arg, ARG_SIZE);
@@ -2053,20 +2066,56 @@ int cuda_host_unregister(VirtIOArg __user *arg, struct port *port)
 		return -ENOMEM;
 	}
 
-	#ifdef VIRTIO_LOCK
+	pages = find_pages_by_addr(payload->src, &port->page);
+	if(!pages) {
+		gldebug("Failed to find such user addr 0x%llx\n", payload->src);
+		// cudaErrorHostMemoryNotRegistered      =     62,
+		put_user(62, &arg->cmd);
+		return 0;
+	}
+	sgs = kmalloc(sizeof(struct scatterlist *) * (1+pages->block_num), GFP_KERNEL);
+	if(!sgs) {
+		pr_err("Failed to allocate sgs memory\n");
+		return -ENOMEM;
+	}
+	sg = kmalloc(sizeof(struct scatterlist) * pages->block_num, GFP_KERNEL);
+	if(!sg) {
+		pr_err("Failed to allocate sg memory\n");
+		return -ENOMEM;
+	}
+	sg_init_one(&arg_sg, payload, sizeof(*payload));
+	sgs[num_out++] = &arg_sg;
+	i = 0;
+	list_for_each_entry(tmp, &pages->block_list, list) {
+		sg_init_one(&sg[i], tmp->data, tmp->size);
+		sgs[num_out++] = &sg[i];
+		i++;
+	}
+	payload->param = pages->block_num;
+	payload->nr_elem = num_out + num_in;
+#ifdef VIRTIO_LOCK
 	spin_lock(&port->io_lock);
-	#endif
-
-	ret = send_to_virtio(port, (void *)payload, ARG_SIZE);
-	#ifdef VIRTIO_LOCK
+#endif
+	send_sgs_to_virtio(port, sgs, num_out, num_in);
+#ifdef VIRTIO_LOCK
 	spin_unlock(&port->io_lock);
-	#endif
+#endif
 
 	gldebug("[+] now analyse return buf\n");
 	gldebug("[+] arg->cmd = %d\n", payload->cmd);
 	put_user(payload->cmd, &arg->cmd);
+	if(!pages->is_mmap) {
+		list_for_each_entry_safe(tmp, tmp2, &pages->block_list, list) {
+			list_del(&tmp->list);
+			kfree(tmp);
+		}
+		list_del(&pages->list);
+		kfree(pages);
+	}
+	kfree(sg);
+	kfree(sgs);
 	kfree(payload);
-	return ret;
+	return 0;
 }
 
 
@@ -2328,11 +2377,13 @@ static int cuda_memcpy_htod(VirtIOArg __user *arg, struct port *port)
 	struct virtio_uvm_page *pages= NULL;
 	uint32_t src_size;
 	struct scatterlist *sg, **sgs, arg_sg;
-	int num_out = 0;
-	long size_left = 0;
-	struct mem_page_st *tmp = NULL;
-	long offset = 0;
+	int num_out = 0, num_in = 0;
+	long size_left = 0, size_offset=0;
+	struct mem_page_st *tmp=NULL, *tmp2=NULL, *mem=NULL;
+	long offset = 0, block_size=0, block_num=0;
 	int i = 0;
+	int found = 0;
+	struct list_head head;
 
 	func();
 	payload = (VirtIOArg *)memdup_user(arg, ARG_SIZE);
@@ -2345,71 +2396,110 @@ static int cuda_memcpy_htod(VirtIOArg __user *arg, struct port *port)
 			payload->tid, payload->src, payload->srcSize,
 			payload->dst, payload->dstSize, payload->flag);
 	src_size = payload->srcSize;
-
-	pages = kmalloc(sizeof(struct virtio_uvm_page),GFP_KERNEL);
-	list_add(&pages->list, &port->page);
-	pages->uvm_start = payload->src;
-	pages->uvm_end 	= payload->src + src_size;
-	pages->block_num = 0;
-	INIT_LIST_HEAD(&pages->block_list);
-	size_left = src_size;
-	while(size_left) {
-		tmp = kmalloc(sizeof(struct mem_page_st), GFP_KERNEL);
-		tmp->size = (size_left > CHUNK_SIZE)? CHUNK_SIZE: size_left;
-		tmp->data = kmalloc(tmp->size, GFP_KERNEL);
-		while(!tmp->data) {
-			tmp->size /=2;
-			if(tmp->size < PAGE_SIZE) {
-				pr_err("[ERROR] Failed to allocate memory.\n");
-				return -ENOMEM;
-			}
+	INIT_LIST_HEAD(&head);
+	block_num=0;
+	pages = find_pages_by_addr(payload->src, &port->page);
+	if(!pages) {
+		found = 0;
+		size_left = src_size;
+		while(size_left) {
+			tmp = kmalloc(sizeof(struct mem_page_st), GFP_KERNEL);
+			tmp->size = (size_left > CHUNK_SIZE)? CHUNK_SIZE: size_left;
 			tmp->data = kmalloc(tmp->size, GFP_KERNEL);
+			while(!tmp->data) {
+				tmp->size /=2;
+				if(tmp->size < PAGE_SIZE) {
+					pr_err("[ERROR] Failed to allocate memory.\n");
+					// cudaErrorInvalidValue                 =     11,
+					put_user(11, &arg->cmd);
+					goto error;
+				}
+				tmp->data = kmalloc(tmp->size, GFP_KERNEL);
+			}
+			if (copy_from_user(tmp->data, (void*)payload->src+offset, tmp->size)) {
+				pr_err("[ERROR] Failed to copy from user.\n");
+				// cudaErrorInvalidValue                 =     11,
+				put_user(11, &arg->cmd);
+				goto error;
+			}
+			list_add_tail(&tmp->list, &head);
+			size_left -= tmp->size;
+			offset += tmp->size;
+			block_num++;
 		}
-		if (copy_from_user(tmp->data, (void*)payload->src+offset, tmp->size)) {
-			pr_err("[ERROR] Failed to copy from user.\n");
-			return -EACCES;
+	} else {
+		found = 1;
+		gldebug("Found addr 0x%llx in (0x%lx - 0x%lx)\n", 
+			payload->src, pages->uvm_start, pages->uvm_end);
+		size_offset = payload->src - pages->uvm_start;
+		size_left = src_size;
+		list_for_each_entry(mem, &pages->block_list, list) {
+			if (size_offset < mem->size) {
+				block_size = mem->size - size_offset;
+				// be carefull with last chunk
+				block_size = (block_size > size_left)? size_left : block_size;
+				tmp = kmalloc(sizeof(struct mem_page_st), GFP_KERNEL);
+				tmp->size = block_size;
+				tmp->data = mem->data+size_offset;
+				list_add_tail(&tmp->list, &head);
+				size_left -= block_size;
+				block_num++;
+				if (!size_left) // finish all transferred blocks
+					goto out;
+				if(size_offset)	// find first chunk then it does not need size_offset
+					size_offset = 0;
+			} else {
+				size_offset -= mem->size;
+			}
 		}
-		list_add_tail(&tmp->list, &pages->block_list);
-		size_left -= tmp->size;
-		offset += tmp->size;
-		pages->block_num++;
 	}
-	gldebug("block_num %ld\n", pages->block_num);
-	sgs = kmalloc(sizeof(struct scatterlist *) * (1+2*pages->block_num), GFP_KERNEL);
+out:
+	gldebug("block_num %ld\n", block_num);
+	sgs = kmalloc(sizeof(struct scatterlist *) * (1+block_num), GFP_KERNEL);
 	if(!sgs) {
 		pr_err("Failed to allocate sgs memory\n");
-		return -ENOMEM;
+		// cudaErrorInvalidValue                 =     11,
+		put_user(11, &arg->cmd);
+		goto error_sgs;
 	}
-	sg = kmalloc(sizeof(struct scatterlist) * 2*pages->block_num, GFP_KERNEL);
+	sg = kmalloc(sizeof(struct scatterlist) * block_num, GFP_KERNEL);
 	if(!sg) {
 		pr_err("Failed to allocate sg memory\n");
-		return -ENOMEM;
+		// cudaErrorInvalidValue                 =     11,
+		put_user(11, &arg->cmd);
+		goto error_sg;
 	}
 	sg_init_one(&arg_sg, payload, sizeof(*payload));
 	sgs[num_out++] = &arg_sg;
 	i = 0;
-	list_for_each_entry(tmp, &pages->block_list, list) {
-		sg_init_one(&sg[i], &tmp->size, sizeof(long));
+	list_for_each_entry(tmp, &head, list) {
+		sg_init_one(&sg[i], tmp->data, tmp->size);
 		sgs[num_out++] = &sg[i];
-		sg_init_one(&sg[i+1], tmp->data, tmp->size);
-		sgs[num_out++] = &sg[i+1];
-		i+=2;
+		i++;
 	}
-	payload->param = pages->block_num;
-	#ifdef VIRTIO_LOCK
+	payload->param = block_num;
+#ifdef VIRTIO_LOCK
 	spin_lock(&port->io_lock);
-	#endif
-
-	send_sgs_to_virtio(port, sgs, num_out, 0);
-	#ifdef VIRTIO_LOCK
+#endif
+	send_sgs_to_virtio(port, sgs, num_out, num_in);
+#ifdef VIRTIO_LOCK
 	spin_unlock(&port->io_lock);
-	#endif
+#endif
 
 	gldebug("[+] now analyse return buf\n");
 	gldebug("[+] arg->cmd = %d\n", payload->cmd);
 	put_user(payload->cmd, &arg->cmd);
+error_sg:
 	kfree(sg);
+error_sgs:
 	kfree(sgs);
+error:
+	list_for_each_entry_safe(tmp, tmp2, &head, list) {
+		list_del(&tmp->list);
+		if(!found)
+			kfree(tmp->data);
+		kfree(tmp);
+	}
 	kfree(payload);
 	return 0;
 }
@@ -2422,10 +2512,12 @@ static int cuda_memcpy_dtoh(VirtIOArg __user *arg, struct port *port)
 	struct scatterlist *sg, **sgs, arg_sg;
 	int num_out = 0;
 	int num_in = 0;
-	long size_left = 0;
-	struct mem_page_st *tmp, *tmp2;
-	long offset = 0;
+	long size_left = 0, size_offset=0;
+	struct mem_page_st *tmp, *tmp2, *mem;
+	long offset = 0, block_size=0, block_num=0;
 	int i = 0;
+	int found = 0;
+	struct list_head head;
 
 	func();
 	payload = (VirtIOArg *)memdup_user(arg, ARG_SIZE);
@@ -2438,88 +2530,132 @@ static int cuda_memcpy_dtoh(VirtIOArg __user *arg, struct port *port)
 			payload->tid, payload->src, payload->srcSize,
 			payload->dst, payload->dstSize, payload->flag);
 	src_size = payload->srcSize;
-
-	pages = kmalloc(sizeof(struct virtio_uvm_page),GFP_KERNEL);
-	list_add(&pages->list, &port->page);
-	pages->uvm_start = payload->src;
-	pages->uvm_end 	= payload->src + src_size;
-	pages->block_num = 0;
-	INIT_LIST_HEAD(&pages->block_list);
-	size_left = src_size;
-	while(size_left) {
-		tmp = kmalloc(sizeof(struct mem_page_st), GFP_KERNEL);
-		tmp->size = (size_left > CHUNK_SIZE)? CHUNK_SIZE: size_left;
-		tmp->data = kmalloc(tmp->size, GFP_KERNEL);
-		while(!tmp->data) {
-			tmp->size /=2;
-			if(tmp->size < PAGE_SIZE) {
-				pr_err("[ERROR] Failed to allocate memory.\n");
-				return -ENOMEM;
-			}
+	INIT_LIST_HEAD(&head);
+	block_num=0;
+	pages = find_pages_by_addr(payload->dst, &port->page);
+	if(!pages) {
+		found = 0;
+		size_left = src_size;
+		while(size_left) {
+			tmp = kmalloc(sizeof(struct mem_page_st), GFP_KERNEL);
+			tmp->size = (size_left > CHUNK_SIZE)? CHUNK_SIZE: size_left;
 			tmp->data = kmalloc(tmp->size, GFP_KERNEL);
+			while(!tmp->data) {
+				tmp->size /=2;
+				if(tmp->size < PAGE_SIZE) {
+					pr_err("[ERROR] Failed to allocate memory.\n");
+					put_user(11, &arg->cmd);
+					goto error;
+				}
+				tmp->data = kmalloc(tmp->size, GFP_KERNEL);
+			}
+			list_add_tail(&tmp->list, &head);
+			size_left -= tmp->size;
+			block_num++;
 		}
-
-		list_add_tail(&tmp->list, &pages->block_list);
-		size_left -= tmp->size;
-		pages->block_num++;
+	} else {
+		found = 1;
+		gldebug("Found addr 0x%llx in (0x%lx - 0x%lx)\n", 
+			payload->dst, pages->uvm_start, pages->uvm_end);
+		size_offset = payload->dst - pages->uvm_start;
+		size_left = src_size;
+		list_for_each_entry(mem, &pages->block_list, list) {
+			if (size_offset < mem->size) {
+				block_size = mem->size - size_offset;
+				// be carefull with last chunk
+				block_size = (block_size > size_left)? size_left : block_size;
+				tmp = kmalloc(sizeof(struct mem_page_st), GFP_KERNEL);
+				tmp->size = block_size;
+				tmp->data = mem->data+size_offset;
+				list_add_tail(&tmp->list, &head);
+				size_left -= block_size;
+				block_num++;
+				if (!size_left) // finish all transferred blocks
+					goto out;
+				if(size_offset)	// find first chunk then it does not need size_offset
+					size_offset = 0;
+			} else {
+				size_offset -= mem->size;
+			}
+		}
 	}
-	gldebug("block_num %ld\n", pages->block_num);
-	sgs = kmalloc(sizeof(struct scatterlist *) * (1+2*pages->block_num), GFP_KERNEL);
+out:
+	gldebug("block_num %ld\n", block_num);
+	sgs = kmalloc(sizeof(struct scatterlist *) * (1+block_num), GFP_KERNEL);
 	if(!sgs) {
 		pr_err("Failed to allocate sgs memory\n");
-		return -ENOMEM;
+		put_user(11, &arg->cmd);
+		goto error_sgs;
 	}
-	sg = kmalloc(sizeof(struct scatterlist) * 2*pages->block_num, GFP_KERNEL);
+	sg = kmalloc(sizeof(struct scatterlist) * block_num, GFP_KERNEL);
 	if(!sg) {
 		pr_err("Failed to allocate sg memory\n");
-		return -ENOMEM;
+		put_user(11, &arg->cmd);
+		goto error_sg;
 	}
 	sg_init_one(&arg_sg, payload, sizeof(*payload));
 	sgs[num_out++] = &arg_sg;
 	i = 0;
-	list_for_each_entry(tmp, &pages->block_list, list) {
-		sg_init_one(&sg[i], &tmp->size, sizeof(long));
+	list_for_each_entry(tmp, &head, list) {
+		sg_init_one(&sg[i], tmp->data, tmp->size);
 		sgs[num_out+num_in++] = &sg[i];
-		sg_init_one(&sg[i+1], tmp->data, tmp->size);
-		sgs[num_out+num_in++] = &sg[i+1];
-		i+=2;
+		i++;
 	}
-	payload->param = pages->block_num;
-	#ifdef VIRTIO_LOCK
-	spin_lock(&port->io_lock);
-	#endif
 
+	payload->param = block_num;
+#ifdef VIRTIO_LOCK
+	spin_lock(&port->io_lock);
+#endif
 	send_sgs_to_virtio(port, sgs, num_out, num_in);
-	#ifdef VIRTIO_LOCK
+#ifdef VIRTIO_LOCK
 	spin_unlock(&port->io_lock);
-	#endif
+#endif
 	offset = 0;
-	list_for_each_entry_safe(tmp, tmp2, &pages->block_list, list) {
+	list_for_each_entry_safe(tmp, tmp2, &head, list) {
 		if(copy_to_user((void*)(payload->dst+offset), tmp->data, tmp->size)) {
 			pr_err("[ERROR] Failed to copy to user.\n");
 			return -EACCES;
 		}
 		offset += tmp->size;
-		list_del(&tmp->list);
-		kfree(tmp->data);
-		kfree(tmp);
 	}
 
 	gldebug("[+] now analyse return buf\n");
 	gldebug("[+] arg->cmd = %d\n", payload->cmd);
 	put_user(payload->cmd, &arg->cmd);
+error_sg:
 	kfree(sg);
+error_sgs:
 	kfree(sgs);
+error:
+	list_for_each_entry_safe(tmp, tmp2, &head, list) {
+		list_del(&tmp->list);
+		if(!found)
+			kfree(tmp->data);
+		kfree(tmp);
+	}
 	kfree(payload);
 	return 0;
 }
 
 static int cuda_memcpy_dtod(VirtIOArg __user *arg, struct port *port)
 {
+	func();
+	return send_single_payload(arg, port);
+}
+
+static int cuda_memcpy_htod_async(VirtIOArg __user *arg, struct port *port)
+{
 	VirtIOArg *payload;
-	struct scatterlist *sgs[1], arg_sg;
-	int num_out = 0;
-	int num_in = 0;
+	struct virtio_uvm_page *pages= NULL;
+	uint32_t src_size;
+	struct scatterlist *sg, **sgs, arg_sg;
+	int num_out = 0, num_in = 0;
+	long size_left = 0, size_offset=0;
+	struct mem_page_st *tmp=NULL, *tmp2=NULL, *mem=NULL;
+	long offset = 0, block_size=0, block_num=0;
+	int i = 0;
+	int found = 0;
+	struct list_head head;
 
 	func();
 	payload = (VirtIOArg *)memdup_user(arg, ARG_SIZE);
@@ -2531,61 +2667,252 @@ static int cuda_memcpy_dtod(VirtIOArg __user *arg, struct port *port)
 			"dst=0x%llx, dstSize=0x%x, kind=%llu\n",
 			payload->tid, payload->src, payload->srcSize,
 			payload->dst, payload->dstSize, payload->flag);
+	src_size = payload->srcSize;
+	INIT_LIST_HEAD(&head);
+	block_num=0;
+	pages = find_pages_by_addr(payload->src, &port->page);
+	if(!pages) {
+		found = 0;
+		size_left = src_size;
+		while(size_left) {
+			tmp = kmalloc(sizeof(struct mem_page_st), GFP_KERNEL);
+			tmp->size = (size_left > CHUNK_SIZE)? CHUNK_SIZE: size_left;
+			tmp->data = kmalloc(tmp->size, GFP_KERNEL);
+			while(!tmp->data) {
+				tmp->size /=2;
+				if(tmp->size < PAGE_SIZE) {
+					pr_err("[ERROR] Failed to allocate memory.\n");
+					// cudaErrorInvalidValue                 =     11,
+					put_user(11, &arg->cmd);
+					goto error;
+				}
+				tmp->data = kmalloc(tmp->size, GFP_KERNEL);
+			}
+			if (copy_from_user(tmp->data, (void*)payload->src+offset, tmp->size)) {
+				pr_err("[ERROR] Failed to copy from user.\n");
+				// cudaErrorInvalidValue                 =     11,
+				put_user(11, &arg->cmd);
+				goto error;
+			}
+			list_add_tail(&tmp->list, &head);
+			size_left -= tmp->size;
+			offset += tmp->size;
+			block_num++;
+		}
+	} else {
+		found = 1;
+		gldebug("Found addr 0x%llx in (0x%lx - 0x%lx)\n", 
+			payload->src, pages->uvm_start, pages->uvm_end);
+		size_offset = payload->src - pages->uvm_start;
+		size_left = src_size;
+		list_for_each_entry(mem, &pages->block_list, list) {
+			if (size_offset < mem->size) {
+				block_size = mem->size - size_offset;
+				// be carefull with last chunk
+				block_size = (block_size > size_left)? size_left : block_size;
+				tmp = kmalloc(sizeof(struct mem_page_st), GFP_KERNEL);
+				tmp->size = block_size;
+				tmp->data = mem->data+size_offset;
+				list_add_tail(&tmp->list, &head);
+				size_left -= block_size;
+				block_num++;
+				if (!size_left) // finish all transferred blocks
+					goto out;
+				if(size_offset)	// find first chunk then it does not need size_offset
+					size_offset = 0;
+			} else {
+				size_offset -= mem->size;
+			}
+		}
+	}
+out:
+	gldebug("block_num %ld\n", block_num);
+	sgs = kmalloc(sizeof(struct scatterlist *) * (1+block_num), GFP_KERNEL);
+	if(!sgs) {
+		pr_err("Failed to allocate sgs memory\n");
+		// cudaErrorInvalidValue                 =     11,
+		put_user(11, &arg->cmd);
+		goto error_sgs;
+	}
+	sg = kmalloc(sizeof(struct scatterlist) * block_num, GFP_KERNEL);
+	if(!sg) {
+		pr_err("Failed to allocate sg memory\n");
+		// cudaErrorInvalidValue                 =     11,
+		put_user(11, &arg->cmd);
+		goto error_sg;
+	}
 	sg_init_one(&arg_sg, payload, sizeof(*payload));
 	sgs[num_out++] = &arg_sg;
-
-	#ifdef VIRTIO_LOCK
+	i = 0;
+	list_for_each_entry(tmp, &head, list) {
+		sg_init_one(&sg[i], tmp->data, tmp->size);
+		sgs[num_out++] = &sg[i];
+		i++;
+	}
+	payload->param = block_num;
+#ifdef VIRTIO_LOCK
 	spin_lock(&port->io_lock);
-	#endif
+#endif
 	send_sgs_to_virtio(port, sgs, num_out, num_in);
-	#ifdef VIRTIO_LOCK
+#ifdef VIRTIO_LOCK
 	spin_unlock(&port->io_lock);
-	#endif
+#endif
 
 	gldebug("[+] now analyse return buf\n");
 	gldebug("[+] arg->cmd = %d\n", payload->cmd);
 	put_user(payload->cmd, &arg->cmd);
+error_sg:
+	kfree(sg);
+error_sgs:
+	kfree(sgs);
+error:
+	list_for_each_entry_safe(tmp, tmp2, &head, list) {
+		list_del(&tmp->list);
+		if(!found)
+			kfree(tmp->data);
+		kfree(tmp);
+	}
 	kfree(payload);
-	return 0;
-}
-
-static int cuda_memcpy_htod_async(VirtIOArg __user *arg, struct port *port)
-{
-	/*VirtIOArg *payload;
-	int found = 0;
-	void *h_mem=NULL;
-	uint32_t src_size;
-	int ret = 0;
-	struct page ** page_list;
-	struct scatterlist *sg, **sgs, arg_sg;
-	int num_out = 0;*/
 	return 0;
 }
 
 static int cuda_memcpy_dtoh_async(VirtIOArg __user *arg, struct port *port)
 {
-/*	VirtIOArg *payload;
-	int found = 0;
-	void *h_mem=NULL;
+	VirtIOArg *payload;
+	struct virtio_uvm_page *pages= NULL;
 	uint32_t src_size;
-	int ret = 0;
-	struct page ** page_list;
 	struct scatterlist *sg, **sgs, arg_sg;
-	int num_out = 0;*/
+	int num_out = 0;
+	int num_in = 0;
+	long size_left = 0, size_offset=0;
+	struct mem_page_st *tmp, *tmp2, *mem;
+	long offset = 0, block_size=0, block_num=0;
+	int i = 0;
+	int found = 0;
+	struct list_head head;
+
+	func();
+	payload = (VirtIOArg *)memdup_user(arg, ARG_SIZE);
+	if(!payload) {
+		pr_err("[ERROR] can not malloc 0x%lx memory\n", ARG_SIZE);
+		return -ENOMEM;
+	}
+	gldebug("tid = %d, src=0x%llx, srcSize=0x%x, "
+			"dst=0x%llx, dstSize=0x%x, kind=%llu\n",
+			payload->tid, payload->src, payload->srcSize,
+			payload->dst, payload->dstSize, payload->flag);
+	src_size = payload->srcSize;
+	INIT_LIST_HEAD(&head);
+	block_num=0;
+	pages = find_pages_by_addr(payload->dst, &port->page);
+	if(!pages) {
+		found = 0;
+		size_left = src_size;
+		while(size_left) {
+			tmp = kmalloc(sizeof(struct mem_page_st), GFP_KERNEL);
+			tmp->size = (size_left > CHUNK_SIZE)? CHUNK_SIZE: size_left;
+			tmp->data = kmalloc(tmp->size, GFP_KERNEL);
+			while(!tmp->data) {
+				tmp->size /=2;
+				if(tmp->size < PAGE_SIZE) {
+					pr_err("[ERROR] Failed to allocate memory.\n");
+					put_user(11, &arg->cmd);
+					goto error;
+				}
+				tmp->data = kmalloc(tmp->size, GFP_KERNEL);
+			}
+			list_add_tail(&tmp->list, &head);
+			size_left -= tmp->size;
+			block_num++;
+		}
+	} else {
+		found = 1;
+		gldebug("Found addr 0x%llx in (0x%lx - 0x%lx)\n", 
+			payload->dst, pages->uvm_start, pages->uvm_end);
+		size_offset = payload->dst - pages->uvm_start;
+		size_left = src_size;
+		list_for_each_entry(mem, &pages->block_list, list) {
+			if (size_offset < mem->size) {
+				block_size = mem->size - size_offset;
+				// be carefull with last chunk
+				block_size = (block_size > size_left)? size_left : block_size;
+				tmp = kmalloc(sizeof(struct mem_page_st), GFP_KERNEL);
+				tmp->size = block_size;
+				tmp->data = mem->data+size_offset;
+				list_add_tail(&tmp->list, &head);
+				size_left -= block_size;
+				block_num++;
+				if (!size_left) // finish all transferred blocks
+					goto out;
+				if(size_offset)	// find first chunk then it does not need size_offset
+					size_offset = 0;
+			} else {
+				size_offset -= mem->size;
+			}
+		}
+	}
+out:
+	gldebug("block_num %ld\n", block_num);
+	sgs = kmalloc(sizeof(struct scatterlist *) * (1+block_num), GFP_KERNEL);
+	if(!sgs) {
+		pr_err("Failed to allocate sgs memory\n");
+		put_user(11, &arg->cmd);
+		goto error_sgs;
+	}
+	sg = kmalloc(sizeof(struct scatterlist) * block_num, GFP_KERNEL);
+	if(!sg) {
+		pr_err("Failed to allocate sg memory\n");
+		put_user(11, &arg->cmd);
+		goto error_sg;
+	}
+	sg_init_one(&arg_sg, payload, sizeof(*payload));
+	sgs[num_out++] = &arg_sg;
+	i = 0;
+	list_for_each_entry(tmp, &head, list) {
+		sg_init_one(&sg[i], tmp->data, tmp->size);
+		sgs[num_out+num_in++] = &sg[i];
+		i++;
+	}
+
+	payload->param = block_num;
+#ifdef VIRTIO_LOCK
+	spin_lock(&port->io_lock);
+#endif
+	send_sgs_to_virtio(port, sgs, num_out, num_in);
+#ifdef VIRTIO_LOCK
+	spin_unlock(&port->io_lock);
+#endif
+	offset = 0;
+	list_for_each_entry_safe(tmp, tmp2, &head, list) {
+		if(copy_to_user((void*)(payload->dst+offset), tmp->data, tmp->size)) {
+			pr_err("[ERROR] Failed to copy to user.\n");
+			return -EACCES;
+		}
+		offset += tmp->size;
+	}
+
+	gldebug("[+] now analyse return buf\n");
+	gldebug("[+] arg->cmd = %d\n", payload->cmd);
+	put_user(payload->cmd, &arg->cmd);
+error_sg:
+	kfree(sg);
+error_sgs:
+	kfree(sgs);
+error:
+	list_for_each_entry_safe(tmp, tmp2, &head, list) {
+		list_del(&tmp->list);
+		if(!found)
+			kfree(tmp->data);
+		kfree(tmp);
+	}
+	kfree(payload);
 	return 0;
 }
 
 static int cuda_memcpy_dtod_async(VirtIOArg __user *arg, struct port *port)
 {
-/*	VirtIOArg *payload;
-	int found = 0;
-	void *h_mem=NULL;
-	uint32_t src_size;
-	int ret = 0;
-	struct page ** page_list;
-	struct scatterlist *sg, **sgs, arg_sg;
-	int num_out = 0;*/
-	return 0;
+	func();
+	return send_single_payload(arg, port);
 }
 
 static int cuda_memcpy(VirtIOArg __user *arg, struct port *port)
@@ -2732,33 +3059,8 @@ RETAsync:
 
 static int cuda_memset(VirtIOArg __user *arg, struct port *port)
 {
-	VirtIOArg *payload;
-	struct scatterlist *sgs[1], arg_sg;
-
 	func();
-	payload = (VirtIOArg *)memdup_user(arg, ARG_SIZE);
-	if(!payload) {
-		pr_err("[ERROR] can not malloc 0x%lx memory\n", ARG_SIZE);
-		return -ENOMEM;
-	}
-	gldebug("dst=0x%llx, value=0x%llx, count=0x%llx\n", \
-			payload->dst, payload->param2, payload->param);
-	sg_init_one(&arg_sg, payload, sizeof(*payload));
-	sgs[0] = &arg_sg;
-	#ifdef VIRTIO_LOCK
-	spin_lock(&port->io_lock);
-	#endif
-
-	send_sgs_to_virtio(port, sgs, 1, 0);
-	#ifdef VIRTIO_LOCK
-	spin_unlock(&port->io_lock);
-	#endif
-
-	gldebug("[+] now analyse return buf\n");
-	gldebug("[+] arg->cmd = %d\n", payload->cmd);
-	put_user(payload->cmd, &arg->cmd);
-	kfree(payload);
-	return 0;
+	return send_single_payload(arg, port);
 }
 
 int cuda_get_last_error(VirtIOArg __user *arg, struct port *port)
@@ -2932,7 +3234,7 @@ static int cuda_set_device_flags(VirtIOArg __user *arg, struct port *port)
 		put_user(36, &arg->cmd);
 		return -EACCES;
 	}
-	vgpu->flags = (unsigned int )arg->flag;
+	vgpu->flags = (unsigned int )payload->flag;
 	put_user(0, &arg->cmd);
 	kfree(payload);
 	return 0;
@@ -4308,18 +4610,24 @@ static void virtio_cuda_device_mmap(struct vm_area_struct *vma)
 static void virtio_cuda_device_munmap(struct vm_area_struct *vma)
 {
 	struct port *port = vma->vm_private_data;
-	int i=0;
-	int block_size = port->block_size;
-	int order = get_order(block_size);
-	struct virtio_uvm_page *page, *tmp2;
+	int order = 0;
+	struct virtio_uvm_page *page, *tmp1;
+	struct mem_page_st *tmp = NULL, *tmp2 = NULL;
+
 	func();
-	list_for_each_entry_safe(page, tmp2, &port->page, list) {
-		if(vma->vm_start == page->uvm_start && vma->vm_end == page->uvm_end) {
-			// gldebug("Found munmap 0x%lx-0x%lx\n", vma->vm_start, vma->vm_end);
-			for(i=0; i<page->block_num; i++) 
-				free_pages(page->blocks[i], order);
+	gldebug("port->id=%d\n", port->id);
+	gldebug("munmap 0x%lx-0x%lx\n", vma->vm_start, vma->vm_end);
+	list_for_each_entry_safe(page, tmp1, &port->page, list) {
+		if(vma->vm_start == page->uvm_start && vma->vm_end <= page->uvm_end &&
+			page->is_mmap) {
+			gldebug("Found munmap 0x%lx-0x%lx\n", vma->vm_start, vma->vm_end);
+			list_for_each_entry_safe(tmp, tmp2, &page->block_list, list) {
+				list_del(&tmp->list);
+				order = get_order(tmp->size);
+				free_pages((unsigned long)tmp->data, order);
+				kfree(tmp);
+			}
 			list_del(&page->list);
-			kfree(page->blocks);
 			kfree(page);
 		}
 	}
@@ -4333,51 +4641,75 @@ static struct vm_operations_struct cuda_mmap_ops = {
 static int port_fops_mmap(struct file *filp, struct vm_area_struct *vma)
 {
 	struct port *port = NULL;
-	struct virtio_uvm_page *pages= NULL;
 	int order = 0;
-	int block_size = 0;
-	int block_num = 0;
-	int i=0;
 	size_t size = vma->vm_end - vma->vm_start;
+	unsigned long offset, size_left;
+	int i = 0;
+	struct virtio_uvm_page *pages= NULL;
+	struct mem_page_st *tmp = NULL, *tmp2 = NULL;
+
+
 	func();
 	port = filp->private_data;
 	gldebug("port->id=%d\n", port->id);
-	block_size = port->block_size;
-	// block_size = PAGE_SIZE;
-	order = get_order(block_size);
 	// max order is 11
-	gldebug("order is %d\n", order);
-	block_num = size / block_size;
 	pages = kmalloc(sizeof(struct virtio_uvm_page),GFP_KERNEL);
-	list_add(&pages->list, &port->page);
-	pages->block_num = block_num;
+	list_add_tail(&pages->list, &port->page);
 	pages->uvm_start = vma->vm_start;
 	pages->uvm_end 	= vma->vm_end;
-	gldebug("block_num is %d\n", block_num);
-	pages->blocks = kmalloc(sizeof(unsigned long)*block_num, GFP_KERNEL);
-	for(i =0; i< block_num; i++) {
-		unsigned long pg = __get_free_pages(GFP_KERNEL, order);
-		if(!pg) {
-			pr_err("get free pages failed\n");
-			return -ENOMEM;
+	pages->block_num = 0;
+	pages->is_mmap = 1;
+	INIT_LIST_HEAD(&pages->block_list);
+	size_left = round_up(size, PAGE_SIZE);
+	gldebug("size %lx round up aligned by PAGE_SIZE is %lx\n", size_left, size);
+	while(size_left) {
+		tmp = kmalloc(sizeof(struct mem_page_st), GFP_KERNEL);
+		tmp->size = (size_left > CHUNK_SIZE)? CHUNK_SIZE: size_left;
+		order = get_order(tmp->size);
+		gldebug("order is %d\n", order);
+		tmp->data = (void *)__get_free_pages(GFP_KERNEL, order);
+		while(!tmp->data) {
+			tmp->size /=2;
+			if(tmp->size < PAGE_SIZE) {
+				pr_err("[ERROR] Failed to allocate memory.\n");
+				goto error;
+			}
+			order = get_order(tmp->size);
+			tmp->data = (void *)__get_free_pages(GFP_KERNEL, order);
 		}
-		pages->blocks[i] = pg;
+		list_add_tail(&tmp->list, &pages->block_list);
+		size_left -= tmp->size;
+		pages->block_num++;
 	}
-	for(i=0; i<block_num; i++) 
+	i = 0;
+	offset = 0;
+	list_for_each_entry(tmp, &pages->block_list, list) {
 		if(remap_pfn_range(vma, 
-						vma->vm_start+i*block_size, 
-						virt_to_phys((void*)pages->blocks[i])>>PAGE_SHIFT,
-						block_size, 
+						vma->vm_start+offset, 
+						virt_to_phys(tmp->data)>>PAGE_SHIFT,
+						tmp->size, 
 						vma->vm_page_prot)) {
-			free_pages(pages->blocks[i], order);
-			kfree(pages->blocks);
-			return -EAGAIN;
+			pr_err("Failed to mmap kaddr to userspace.\n");
+			goto error;
 		}
+		offset += tmp->size;
+	}
 
 	vma->vm_ops = &cuda_mmap_ops;
 	vma->vm_private_data = filp->private_data;
 	virtio_cuda_device_mmap(vma);
 	return 0;
+error:
+	pr_err("Failed to mmap.\n");
+	list_for_each_entry_safe(tmp, tmp2, &pages->block_list, list) {
+		list_del(&tmp->list);
+		order = get_order(tmp->size);
+		free_pages((unsigned long)tmp->data, order);
+		kfree(tmp);
+	}
+	list_del(&pages->list);
+	kfree(pages);
+	return -ENOMEM;
 }
 
 /*
@@ -5071,7 +5403,7 @@ static void in_intr(struct virtqueue *vq)
 	 * guest_connected to true.
 	 */
 
-	if (!port->guest_connected && !is_rproc_serial(port->portdev->vdev))
+	// if (!port->guest_connected && !is_rproc_serial(port->portdev->vdev))
 		discard_port_data(port);
 
 	/* Send a SIGIO indicating new data in case the process asked for it */

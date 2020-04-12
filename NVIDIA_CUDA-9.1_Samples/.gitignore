@@ -1,10 +1,5 @@
 ./4_Finance/MonteCarloMultiGPU/MonteCarloMultiGPU
 ./4_Finance/MonteCarloMultiGPU/run.sh
-./bin/x86_64/linux/release/deviceQuery
-./bin/x86_64/linux/release/MonteCarloMultiGPU
-./bin/x86_64/linux/release/alignedTypes
-./bin/x86_64/linux/release/vectorAdd
-./bin/x86_64/linux/release/simpleStreams
 ./1_Utilities/deviceQuery/deviceQuery
 ./1_Utilities/deviceQuery/device
 ./1_Utilities/deviceQuery/build_run.sh

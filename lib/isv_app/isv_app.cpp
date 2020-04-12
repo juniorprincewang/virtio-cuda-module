@@ -83,8 +83,6 @@ static int cuda_api_count[API_TYPE_SIZE] = {0};
 */
 static long accum_memcpy_size[5]={0};
 
-
-
 typedef struct KernelConf
 {
     dim3 gridDim;
@@ -198,45 +196,14 @@ static size_t roundup(size_t n, size_t alignment)
 {
     return (n+(alignment-1))/alignment * alignment;
 }
-/*
-static void mmapctl(void *ptr)
-{
-    VirtIOArg arg;
-    BlockHeader* blk = NULL;
-    func();
-    blk = get_block_by_ptr(ptr);
-    if(!blk) {
-        return;
-    }
-    void *origin_addr   = blk->address;
-    size_t total_size   = blk->total_size;
-    size_t data_size    = blk->data_size;
-    memset(&arg, 0, ARG_LEN);
-    arg.cmd     = VIRTIO_CUDA_MMAPCTL;
-    arg.src     = (uint64_t)origin_addr;
-    arg.srcSize = total_size;
-    arg.tid     = syscall(SYS_gettid);
-    send_to_device(VIRTIO_IOC_MMAPCTL, &arg);
-    
-    blk->address        = origin_addr;
-    blk->total_size     = total_size;
-    blk->data_size      = data_size;
-    blk->magic          = BLOCK_MAGIC;
-}
-*/
 
 static void *__mmalloc(size_t size)
 {
-    VirtIOArg arg;
-    void *src = NULL;
-    int alignment = 8;
+    int alignment = 0x200;
     func();
     // size_t page_size = sysconf(_SC_PAGESIZE);
     // debug("page size = %d\n", page_size);
-    size_t data_start_offset = roundup(sizeof(BlockHeader), alignment);
-    size_t header_start_offset = data_start_offset - sizeof(BlockHeader);
-    size_t total_size = data_start_offset + size;
-    size_t blocks_size = roundup(total_size, KMALLOC_SIZE);
+    size_t blocks_size = roundup(size, alignment);
 
     void *ptr = mmap(0, blocks_size, PROT_READ|PROT_WRITE, 
                         MAP_SHARED, ctx->fd, map_offset);
@@ -244,71 +211,214 @@ static void *__mmalloc(size_t size)
         error("mmap failed, error: %s.\n", strerror(errno));
         return NULL;
     }
-    map_offset += blocks_size;
-    BlockHeader* blk    = (BlockHeader*)((char*)ptr + header_start_offset);
-
-    msync(ptr, blocks_size, MS_ASYNC);
-    src = (char*)ptr + data_start_offset;
-    debug("get ptr =%p, size=%lx\n", ptr, blocks_size);
-    debug("return src =%p\n", src);
-    // mmapctl(src);
-
-    memset(&arg, 0, ARG_LEN);
-    arg.cmd     = VIRTIO_CUDA_MMAPCTL;
-    arg.src     = (uint64_t)ptr;
-    arg.srcSize = (uint32_t)blocks_size;
-    arg.tid     = (uint32_t)syscall(SYS_gettid);
-    send_to_device(VIRTIO_IOC_MMAPCTL, &arg);
     
-    blk->address        = ptr;
-    blk->total_size     = blocks_size;
-    blk->data_size      = size;
-    blk->magic          = BLOCK_MAGIC;
-    return src;
+    msync(ptr, blocks_size, MS_ASYNC);
+    debug("get ptr =%p, size=%lx\n", ptr, blocks_size);
+    return ptr;
 }
 
-static void munmapctl(void *ptr)
-{
-    VirtIOArg arg;
-    BlockHeader* blk = NULL;
-    // func();
-    blk = get_block_by_ptr(ptr);
-    if(!blk) {
-        return;
-    }
-    memset(&arg, 0, ARG_LEN);
-    arg.cmd     = VIRTIO_CUDA_MUNMAPCTL;
-    arg.src     = (uint64_t)blk->address;
-    arg.srcSize = (uint32_t)blk->total_size;
-    arg.tid     = (uint32_t)syscall(SYS_gettid);
-    send_to_device(VIRTIO_IOC_MUNMAPCTL, &arg);
-}
-
-extern "C" void *my_malloc(size_t size)
+static void *my_malloc(size_t size)
 {
     debug("malloc 0x%lx\n", size);
-    if (size >= KMALLOC_SIZE)
+    size = roundup(size, 0x200);
+    // if (size >= KMALLOC_SIZE)
         return __mmalloc(size);
-    return __libc_malloc(size);
+    // return __libc_malloc(size);
 }
 
-extern "C" void my_free(void *ptr)
+static void my_free(void *ptr)
 {
-    BlockHeader* blk = NULL;
-    if (ptr == NULL)
-        return;
-    blk = get_block_by_ptr(ptr);
-    if(!blk) {
-        __libc_free(ptr);
+    // if() {
+    //     __libc_free(ptr);
+    //     return;
+    // }
+    munmap(ptr, 0);
+}
+
+/**************************************************/
+/**************************************************/
+// start of crypto helper
+static void get_mac(uint8_t *data, uint32_t size, uint8_t *payload_tag)
+{
+    sgx_status_t status;
+    int ret;
+    ret = mac_data(sgx_env.enclave_id, &status, sgx_env.context, 
+                            data, size, payload_tag);
+    if((SGX_SUCCESS != ret)  || (SGX_SUCCESS != status))
+    {
+        error("\nError, get mac using SK based AESGCM failed. ret = "
+                        "0x%0x. status = 0x%0x", ret, status);
         return;
     }
-    debug("blk->address   =0x%lx\n",(uint64_t)blk->address);
-    debug("blk->total_size=0x%lx\n",(uint64_t)blk->total_size);
-    debug("magic 0x%lx\n", blk->magic);
-    munmapctl(ptr);
-    munmap((void*)blk->address, blk->total_size);
+    debug("payload tag\n");
+    for (int k=0; k<SAMPLE_SP_TAG_SIZE; k++) {
+        debug_clean("%x ", payload_tag[k]);
+    }
+    debug_clean("\n\n");
 }
 
+static void get_decrypted_data(uint8_t *src, uint32_t size, uint8_t *dst, uint8_t *payload_tag)
+{
+    sgx_status_t status;
+    int ret;
+    debug("payload tag\n");
+    for (int k=0; k<SAMPLE_SP_TAG_SIZE; k++) {
+        debug_clean("%x ", payload_tag[k]);
+    }
+    debug_clean("\n\n");
+    ret = decrypt_data(sgx_env.enclave_id, &status, sgx_env.context, 
+                            src, size, dst, payload_tag);
+    if((SGX_SUCCESS != ret)  || (SGX_SUCCESS != status))
+    {
+        error("\nError, decrypt data using SK based AESGCM failed. ret = "
+                        "0x%0x. status = 0x%0x\n", ret, status);
+        return;
+    }
+}
+
+static void get_encrypted_data(uint8_t *src, uint32_t size, uint8_t *dst, uint8_t *payload_tag)
+{
+    sgx_status_t status;
+    int ret;
+    ret = encrypt_data(sgx_env.enclave_id, &status, sgx_env.context, 
+                            src, size, dst, payload_tag);
+    if((SGX_SUCCESS != ret)  || (SGX_SUCCESS != status))
+    {
+        error("Error, encrypt data using SK based AESGCM failed. ret = "
+                        "0x%0x. status = 0x%0x\n", ret, status);
+        return;
+    }
+    debug("payload tag\n");
+    for (int k=0; k<SAMPLE_SP_TAG_SIZE; k++) {
+        debug_clean("%x ", payload_tag[k]);
+    }
+    debug_clean("\n\n");
+}
+// end of crypto helper
+/**************************************************/
+/**************************************************/
+// start of context helper
+static void init_primary_context()
+{
+    VirtIOArg arg;
+#ifdef ENABLE_MAC
+    uint8_t payload_tag[SAMPLE_SP_TAG_SIZE];
+#endif
+    if(!ctx->primary_context_initialized) {
+        ctx->primary_context_initialized = 1;
+        memset(&arg, 0, ARG_LEN);
+        debug("nr_binary %x\n", p_binary->nr_binary);
+#ifdef ENABLE_MAC
+        get_mac((uint8_t *)p_binary, p_binary->total_size, payload_tag);
+        memcpy(arg.mac, payload_tag, SAMPLE_SP_TAG_SIZE);
+#endif
+        arg.src     = (uint64_t)p_binary;
+        arg.srcSize = p_binary->total_size;
+        arg.cmd     = VIRTIO_CUDA_PRIMARYCONTEXT;
+        arg.tid     = (uint32_t)syscall(SYS_gettid);
+        send_to_device(VIRTIO_IOC_PRIMARYCONTEXT, &arg);
+        if(arg.cmd != cudaSuccess)
+        {
+            error("Failed to initialize primary context\n");
+            exit(-1);
+        }
+    }
+}
+
+static void dump_fatbin_to_file(char *fatbin, int size)
+{
+    int fd = open("/tmp/test.cubin", O_WRONLY| O_TRUNC | O_CREAT, 0666);
+    write(fd, (void*)fatbin, size);
+    close(fd);
+}
+
+static CUmod_st * mod_add(const char *cubin)
+{
+    CUmod_st *mod = (CUmod_st*)malloc(sizeof(*mod));
+    if(cuda_load_cubin(mod, cubin)) {
+        error("Failed to load cubin\n");
+        return NULL;
+    }
+    if(!ctx->head_mod) {
+        ctx->head_mod = mod;
+        mod->next=NULL;
+    } else {
+        mod->next = ctx->head_mod;
+        ctx->head_mod = mod;
+    }
+    ctx->nr_mod++;
+    return mod;
+}
+
+static void mod_clear()
+{
+    CUmod_st *mod=NULL, *tmp=NULL;
+    if(ctx->head_mod) {
+        mod = ctx->head_mod;
+        while (mod->next) {
+            tmp = mod->next;
+            mod->next = tmp->next;
+            cuda_unload_cubin(tmp);
+            free(tmp);
+            tmp=NULL;
+        }
+        cuda_unload_cubin(mod);
+        free(mod);
+        ctx->head_mod=NULL;
+    }
+}
+
+static void dump_cuda_symbol(struct CUmod_st *mod)
+{
+    dump_symbol(mod);
+}
+
+static void dump_cuda_kernel(struct CUmod_st *mod)
+{
+    dump_kernel(mod);
+}
+
+static void count_cuda_api(void)
+{
+    int cnt = 0;
+    printf("API count:\n");
+    for(int i=0; i<API_TYPE_SIZE; i++) {
+        cnt += cuda_api_count[i];
+        printf(" %d : %d \n", i, cuda_api_count[i]);
+    }
+    printf("total #api is %d\n", cnt);
+}
+
+static void format_size(long size)
+{
+    long n=size;
+    if(n>>30) {
+        printf(" %ld GB\n", n>>30);
+        return;
+    } else if(n>>20) {
+        printf(" %ld MB\n", n>>20);
+        return;
+    } else if(n>>10) {
+        printf(" %ld KB\n", n>>10);
+        return;
+    } else {
+        printf(" %ld B\n",  n);
+        return;
+    }
+}
+
+static void count_memcpy_size(void)
+{
+    printf("accumulate memcpy size:\n");
+    for(int i=0; i<5; i++) {
+        printf(" %d : 0x%lx(%ld) \t", i, accum_memcpy_size[i], accum_memcpy_size[i]);
+        format_size(accum_memcpy_size[i]);
+    }
+}
+// end of context helper
+/**************************************************/
+/**************************************************/
+// start of library helper
 int get_vdevice_count(int *result)
 {
     char fname[128]="/proc/virtio-cuda/virtual_device_count";
@@ -455,176 +565,7 @@ void my_library_fini(void)
     count_memcpy_size();
 #endif
 }
-// end of memory management
-/**************************************************/
-/**************************************************/
-// start of crypto helper
-static void get_mac(uint8_t *data, uint32_t size, uint8_t *payload_tag)
-{
-    sgx_status_t status;
-    int ret;
-    ret = mac_data(sgx_env.enclave_id, &status, sgx_env.context, 
-                            data, size, payload_tag);
-    if((SGX_SUCCESS != ret)  || (SGX_SUCCESS != status))
-    {
-        error("\nError, get mac using SK based AESGCM failed. ret = "
-                        "0x%0x. status = 0x%0x", ret, status);
-        return;
-    }
-    debug("payload tag\n");
-    for (int k=0; k<SAMPLE_SP_TAG_SIZE; k++) {
-        debug_clean("%x ", payload_tag[k]);
-    }
-    debug_clean("\n\n");
-}
-
-static void get_decrypted_data(uint8_t *src, uint32_t size, uint8_t *dst, uint8_t *payload_tag)
-{
-    sgx_status_t status;
-    int ret;
-    debug("payload tag\n");
-    for (int k=0; k<SAMPLE_SP_TAG_SIZE; k++) {
-        debug_clean("%x ", payload_tag[k]);
-    }
-    debug_clean("\n\n");
-    ret = decrypt_data(sgx_env.enclave_id, &status, sgx_env.context, 
-                            src, size, dst, payload_tag);
-    if((SGX_SUCCESS != ret)  || (SGX_SUCCESS != status))
-    {
-        error("\nError, decrypt data using SK based AESGCM failed. ret = "
-                        "0x%0x. status = 0x%0x\n", ret, status);
-        return;
-    }
-}
-
-static void get_encrypted_data(uint8_t *src, uint32_t size, uint8_t *dst, uint8_t *payload_tag)
-{
-    sgx_status_t status;
-    int ret;
-    ret = encrypt_data(sgx_env.enclave_id, &status, sgx_env.context, 
-                            src, size, dst, payload_tag);
-    if((SGX_SUCCESS != ret)  || (SGX_SUCCESS != status))
-    {
-        error("Error, encrypt data using SK based AESGCM failed. ret = "
-                        "0x%0x. status = 0x%0x\n", ret, status);
-        return;
-    }
-    debug("payload tag\n");
-    for (int k=0; k<SAMPLE_SP_TAG_SIZE; k++) {
-        debug_clean("%x ", payload_tag[k]);
-    }
-    debug_clean("\n\n");
-}
-// end of crypto helper
-/**************************************************/
-/**************************************************/
-// start of context helper
-static void init_primary_context()
-{
-    VirtIOArg arg;
-#ifdef ENABLE_MAC
-    uint8_t payload_tag[SAMPLE_SP_TAG_SIZE];
-#endif
-    if(!ctx->primary_context_initialized) {
-        ctx->primary_context_initialized = 1;
-        memset(&arg, 0, ARG_LEN);
-        debug("nr_binary %x\n", p_binary->nr_binary);
-#ifdef ENABLE_MAC
-        get_mac((uint8_t *)p_binary, p_binary->total_size, payload_tag);
-        memcpy(arg.mac, payload_tag, SAMPLE_SP_TAG_SIZE);
-#endif
-        arg.src     = (uint64_t)p_binary;
-        arg.srcSize = p_binary->total_size;
-        arg.cmd     = VIRTIO_CUDA_PRIMARYCONTEXT;
-        arg.tid     = (uint32_t)syscall(SYS_gettid);
-        send_to_device(VIRTIO_IOC_PRIMARYCONTEXT, &arg);
-        if(arg.cmd != cudaSuccess)
-        {
-            error("Failed to initialize primary context\n");
-            exit(-1);
-        }
-    }
-}
-
-static void dump_fatbin_to_file(char *fatbin, int size)
-{
-    int fd = open("/tmp/test.cubin", O_WRONLY| O_TRUNC | O_CREAT, 0666);
-    write(fd, (void*)fatbin, size);
-    close(fd);
-}
-
-static CUmod_st * mod_add(const char *cubin)
-{
-    CUmod_st *mod = (CUmod_st*)malloc(sizeof(*mod));
-    if(cuda_load_cubin(mod, cubin)) {
-        error("Failed to load cubin\n");
-        return NULL;
-    }
-    mod->next = ctx->head_mod;
-    ctx->head_mod = mod;
-    ctx->nr_mod++;
-    return mod;
-}
-
-static void mod_clear()
-{
-    CUmod_st *mod=NULL;
-    while (ctx->head_mod) {
-        mod = ctx->head_mod->next;
-        ctx->head_mod = ctx->head_mod->next;
-        cuda_unload_cubin(mod);
-        free(mod);
-    }
-}
-
-static void dump_cuda_symbol(struct CUmod_st *mod)
-{
-    dump_symbol(mod);
-}
-
-static void dump_cuda_kernel(struct CUmod_st *mod)
-{
-    dump_kernel(mod);
-}
-
-static void count_cuda_api(void)
-{
-    int cnt = 0;
-    printf("API count:\n");
-    for(int i=0; i<API_TYPE_SIZE; i++) {
-        cnt += cuda_api_count[i];
-        printf(" %d : %d \n", i, cuda_api_count[i]);
-    }
-    printf("total #api is %d\n", cnt);
-}
-
-static void format_size(long size)
-{
-    long n=size;
-    if(n>>30) {
-        printf(" %ld GB\n", n>>30);
-        return;
-    } else if(n>>20) {
-        printf(" %ld MB\n", n>>20);
-        return;
-    } else if(n>>10) {
-        printf(" %ld KB\n", n>>10);
-        return;
-    } else {
-        printf(" %ld B\n",  n);
-        return;
-    }
-}
-
-static void count_memcpy_size(void)
-{
-    printf("accumulate memcpy size:\n");
-    for(int i=0; i<5; i++) {
-        printf(" %d : 0x%lx(%ld) \t", i, accum_memcpy_size[i], accum_memcpy_size[i]);
-        format_size(accum_memcpy_size[i]);
-    }
-}
-// end of context helper
+// end of library helper
 /**************************************************/
 /**************************************************/
 // start of context management
@@ -716,8 +657,8 @@ extern "C" void** __cudaRegisterFatBinary(void *fatCubin)
 extern "C" void __cudaUnregisterFatBinary(void **fatCubinHandle)
 {
     func();
-    debug("fatcubinhandle %p\n", fatCubinHandle[0]);
     mod_clear();
+    debug("fatcubinhandle %p\n", fatCubinHandle[0]);
     return ;
 }
 
@@ -769,7 +710,13 @@ extern "C" void __cudaRegisterFunction(
     buf_size = (uint32_t)(strlen(deviceName)+1);
 
     struct CUfunc_st* func;
-    if( (func = lookup_func_by_name(ctx->head_mod, deviceName)) == NULL) {
+    struct CUmod_st *head = ctx->head_mod;
+    while (head) { 
+        if( (func = lookup_func_by_name(head, deviceName)) != NULL)
+            break;
+        head = head->next;
+    }
+    if (!head) {
         error("Failed to lookup kernel name %s in cubin\n", deviceName);
         return;
     }
@@ -836,7 +783,13 @@ extern "C" void __cudaRegisterVar(
     buf_size = (uint32_t)(strlen(deviceName)+1);
 
     struct cuda_const_symbol* cs;
-    if( (cs = lookup_symbol_by_name(ctx->head_mod, deviceName)) == NULL) {
+    struct CUmod_st *head = ctx->head_mod;
+    while (head) {
+        if( (cs = lookup_symbol_by_name(head, deviceName)) != NULL)
+            break;
+        head = head->next;
+    }
+    if (!head) {
         error("Failed to lookup symbol name %s in cubin\n", deviceName);
         return;
     }
@@ -1006,7 +959,13 @@ extern "C" cudaError_t cudaLaunchKernel(
     debug("stream= %lu\n", stream);
 
     struct CUfunc_st* func;
-    if( (func = lookup_func_by_hostfunc(ctx->head_mod, hostFunc)) == NULL) {
+    struct CUmod_st *head = ctx->head_mod;
+    while (head) { 
+        if( (func = lookup_func_by_hostfunc(head, hostFunc)) != NULL)
+            break;
+        head = head->next;
+    }
+    if (!head) {
         error("Failed to lookup kernel host func %p in cubin\n", hostFunc);
         return cudaErrorUnknown;
     }
@@ -1191,6 +1150,7 @@ extern "C" cudaError_t cudaMemcpy(void *dst, const void *src, size_t count, enum
         send_to_device(VIRTIO_IOC_MEMCPY_DTOH, &arg);
     } else if(kind == cudaMemcpyHostToHost) {
         memcpy(dst, src, count);
+        ctx->result = (CUresult)0;
         return cudaSuccess;
     } else if (kind == cudaMemcpyDeviceToDevice) {
         arg.cmd     = VIRTIO_CUDA_MEMCPY_DTOD;
@@ -1289,19 +1249,27 @@ extern "C" cudaError_t cudaMemcpyAsync(
     mem_inc(kind, count);
     init_primary_context();
     memset(&arg, 0, sizeof(VirtIOArg));
-    arg.cmd     = VIRTIO_CUDA_MEMCPY_ASYNC;
+    // arg.cmd     = VIRTIO_CUDA_MEMCPY_ASYNC;
     arg.flag    = kind;
     arg.src     = (uint64_t)src;
     arg.srcSize = (uint32_t)count;
     arg.dst     = (uint64_t)dst;
-    arg.src2    = (uint64_t)stream;
-    arg.param   = (uint64_t)stream;
+    arg.dstSize = (uint32_t)count;
+    arg.stream  = (uint64_t)stream;
     arg.tid     = (uint32_t)syscall(SYS_gettid);
-    send_to_device(VIRTIO_IOC_MEMCPY_ASYNC, &arg);
-    if (arg.flag == cudaMemcpyHostToHost) {
+     if (kind == cudaMemcpyHostToDevice) {
+        arg.cmd     = VIRTIO_CUDA_MEMCPY_HTOD_ASYNC;
+        send_to_device(VIRTIO_IOC_MEMCPY_HTOD_ASYNC, &arg);
+    } else if(kind ==cudaMemcpyDeviceToHost) {
+        arg.cmd     = VIRTIO_CUDA_MEMCPY_DTOH_ASYNC;
+        send_to_device(VIRTIO_IOC_MEMCPY_DTOH_ASYNC, &arg);
+    } else if(kind == cudaMemcpyHostToHost) {
         memcpy(dst, src, count);
         ctx->result = (CUresult)0;
         return cudaSuccess;
+    } else if (kind == cudaMemcpyDeviceToDevice) {
+        arg.cmd     = VIRTIO_CUDA_MEMCPY_DTOD_ASYNC;
+        send_to_device(VIRTIO_IOC_MEMCPY_DTOD_ASYNC, &arg);
     }
     ctx->result = (CUresult)arg.cmd;
     return (cudaError_t)arg.cmd;    
@@ -1364,7 +1332,7 @@ extern "C" cudaError_t cudaHostUnregister(void *ptr)
 extern "C" cudaError_t cudaHostAlloc(void **pHost, size_t size, unsigned int flags)
 {
     func();
-    api_inc(API_MEM);
+    // api_inc(API_MEM);
     init_primary_context();
     if(size <=0)
         return cudaSuccess;
@@ -1376,7 +1344,7 @@ extern "C" cudaError_t cudaHostAlloc(void **pHost, size_t size, unsigned int fla
 extern "C" cudaError_t cudaMallocHost(void **ptr, size_t size)
 {
     func();
-    api_inc(API_MEM);
+    // api_inc(API_MEM);
     debug("allocating size 0x%lx\n", size);
     return cudaHostAlloc(ptr, size, cudaHostAllocDefault);
 }
@@ -1385,20 +1353,12 @@ extern "C" cudaError_t cudaFreeHost(void *ptr)
 {
     BlockHeader* blk = NULL;
     func();
-    api_inc(API_MEM);
+    // api_inc(API_MEM);
     init_primary_context();
     if(!ptr)
         return cudaSuccess;
     cudaError_t err = cudaHostUnregister(ptr);
-    blk = get_block_by_ptr(ptr);
-    if(!blk) {
-        return err;
-    }
-    debug("blk->address   =0x%lx\n",(uint64_t)blk->address);
-    debug("blk->total_size=0x%lx\n",(uint64_t)blk->total_size);
-    debug("magic 0x%lx\n", blk->magic);
-    munmapctl(ptr);
-    munmap(blk->address, blk->total_size);
+    my_free(ptr);
     return err;
 }
 

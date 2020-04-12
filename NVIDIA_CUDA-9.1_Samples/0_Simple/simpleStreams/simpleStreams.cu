@@ -430,6 +430,7 @@ int main(int argc, char **argv)
     double time_spent = (double)(end.tv_usec - start.tv_usec)/1000000 +
                         (double)(end.tv_sec - start.tv_sec);
     printf("time spent is %lf\n", time_spent);
+    printf("Result %s\n", bResults? "PASS" : "FAILED");
 
     return bResults ? EXIT_SUCCESS : EXIT_FAILURE;
 }
