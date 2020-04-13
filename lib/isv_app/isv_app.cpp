@@ -336,7 +336,6 @@ static CUmod_st * mod_add(const char *cubin)
 {
     CUmod_st *mod = (CUmod_st*)malloc(sizeof(*mod));
     if(cuda_load_cubin(mod, cubin)) {
-        error("Failed to load cubin\n");
         return NULL;
     }
     if(!ctx->head_mod) {
@@ -589,7 +588,7 @@ extern "C" void** __cudaRegisterFatBinary(void *fatCubin)
         debug("FatBin\n");
         debug("magic    =   0x%x\n", binary->magic);
         debug("version  =   0x%x\n", binary->version);
-        debug("data =   %p\n", binary->data);
+        debug("data =   0x%llx\n", *(uint64_t*)binary->data);
         debug("filename_or_fatbins  =   %p\n", binary->filename_or_fatbins);
         fatCubinHandle = (void **)&binary->data;
         fatHeader = (struct fatBinaryHeader*)binary->data;
@@ -601,12 +600,13 @@ extern "C" void** __cudaRegisterFatBinary(void *fatCubin)
         // dump_fatbin_to_file((char *)binary->data, fatHeader->headerSize + fatHeader->fatSize);
         // Note that fatcubin includes meta header and cubin data
         // meta header occupies first 0x50 bytes.
+
         CUmod_st *mod = mod_add((char*)binary->data+0x50);
     #ifdef VIRTIO_CUDA_DEBUG
         dump_cuda_symbol(mod);
         dump_cuda_kernel(mod);
     #endif
-        
+
         // initialize arguments
         memset(&arg, 0, ARG_LEN);
         size = (uint32_t)(fatHeader->headerSize + fatHeader->fatSize);

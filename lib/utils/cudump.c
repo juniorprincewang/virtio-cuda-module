@@ -27,7 +27,7 @@ static void cubin_func_skip(char **pos, section_entry_t *e)
 
 static void cubin_func_unknown(char **pos, section_entry_t *e)
 {
-	printf("/* nv.info: unknown entry type: 0x%.4x, size=0x%x */\n",
+	fprintf(stderr, "/* nv.info: unknown entry type: 0x%.4x, size=0x%x */\n",
 			   e->type, e->size);
 	cubin_func_skip(pos, e);
 }
@@ -89,7 +89,7 @@ static int cubin_func_1704
 	/* append to the head of the parameter data list. */
 	param_data->next = raw_func->param_data;
 	raw_func->param_data = param_data;
-
+	raw_func->param_count++;
 	*pos += e->size;
 
 	return 0;
@@ -100,32 +100,9 @@ static int cubin_func_1903
 {
 	int ret;
 	char *pos2;
-
+	// 3 19 1c 0 
 	*pos += sizeof(section_entry_t);
-	pos2 = *pos;
-
-	/* obtain parameters information. is this really safe? */
-	do {
-		section_entry_t *sh_e = (section_entry_t *)pos2;
-		ret = cubin_func_1704(&pos2, sh_e, raw_func);
-		if (ret)
-			return ret;
-		raw_func->param_count++;
-	} while (((section_entry_t *)pos2)->type == 0x1704);
-
-	/* just check if the parameter size matches. */
-	if (raw_func->param_size != e->size) {
-		if (e->type == 0x1803) { /* sm_13 needs to set param_size here. */
-			raw_func->param_size = e->size;
-		}
-		else {
-			printf("Parameter size mismatched\n");
-			printf("0x%x and 0x%x\n", raw_func->param_size, e->size);
-		}
-	}
-
-	*pos = pos2; /* need to check if this is correct! */
-
+	raw_func->param_size = e->size;
 	return 0;
 }
 
@@ -143,6 +120,13 @@ static int cubin_func_1e04
 	return 0;
 }
 
+static void cubin_func_1b03(char **pos, section_entry_t *e)
+{
+	// 3 1b ffffffff 0 
+	// or 3 1b 3f 0
+	*pos += sizeof(section_entry_t);
+}
+
 static int cubin_func_type
 (char **pos, section_entry_t *e, struct cuda_raw_func *raw_func)
 {
@@ -157,41 +141,27 @@ static int cubin_func_type
 		return cubin_func_0c04(pos, e, raw_func);
 	case 0x0d04: /* stack information, hmm... */
 		return cubin_func_0d04(pos, e, raw_func);
-	case 0x1104: /* ignore recursive call */
-		cubin_func_skip(pos, e);
-		break;
 	case 0x1204: /* some counters but what is this? */
 		cubin_func_skip(pos, e);
 		break;
-	case 0x1803: /* kernel parameters itself (sm_13) */
-	case 0x1903: /* kernel parameters itself (sm_20/sm_30) */
+	case 0x1803: /* kernel parameters size (sm_13) */
+	case 0x1903: /* kernel parameters size (sm_20/sm_30) */
+	case 0x2101: /* kernel parameters size (> sm_70)*/
 		return cubin_func_1903(pos, e, raw_func);
 	case 0x1704: /* each parameter information */
 		return cubin_func_1704(pos, e, raw_func);
 	case 0x1e04: /* crs stack size information */
 		return cubin_func_1e04(pos, e, raw_func);
-	case 0x0001: /* ??? */
-		cubin_func_skip(pos, e);
-		break;
 	case 0x1b03: /*sm 35 unknow*/
+		cubin_func_1b03(pos, e);
+		break;
+	case 0x1c04: /*fix me*/
 		cubin_func_skip(pos, e);
 		break;
-	case 0x080d: /* ??? */
+	case 0x1d04:  /*fix me*/
 		cubin_func_skip(pos, e);
 		break;
-	case 0xf000: /* maybe just padding??? */
-		*pos += 4;
-		break;
-	case 0xffff: /* ??? */
-		cubin_func_skip(pos, e);
-		break;
-	case 0x0020: /* ??? */
-		cubin_func_skip(pos, e);
-		break;
-	case 0x0800: /* ./binomialOptions unknown */
-		cubin_func_skip(pos, e);
-		break;
-	case 0x0016: /* ./binomialOptions unknown */
+	case 0x2804: /*fix me*/
 		cubin_func_skip(pos, e);
 		break;
 	default: /* real unknown */
@@ -302,7 +272,6 @@ void dump_kernel(struct CUmod_st *mod)
         printf("func name %s, size %d\n", 
             f->name, f->code_size);
         printf("func code buf %p\n", f->code_buf);
-        printf("\t},\n");
         printf("\t.param_base = 0x%x,\n", f->param_base);
         printf("\t.param_size = 0x%x,\n", f->param_size);
         printf("\t.param_count = 0x%x,\n", f->param_count);
@@ -316,6 +285,7 @@ void dump_kernel(struct CUmod_st *mod)
                    param_data->flags);
             param_data = param_data->next;
         }
+        printf("\t}\n");
     }
     printf("\n");
 }
@@ -401,8 +371,10 @@ static int load_cubin(struct CUmod_st *mod, const char *bin)
 	char *pos;
 	int i, ret = 0;
 
-	if (memcmp(bin, "\177ELF", 4))
+	if (memcmp(bin, "\x7f\x45\x4c\x46", 4)) {
+		fprintf(stderr, "Failed to find 0x7fELF header flag\n");
 		return -ENOENT;
+	}
 
 	/* initialize ELF variables. */
 	ehead = (Elf_Ehdr *)bin;
@@ -419,6 +391,7 @@ static int load_cubin(struct CUmod_st *mod, const char *bin)
 	/* seek the ELF header. */
 	for (i = 0; i < ehead->e_shnum; i++) {
 		sh_name = (char *)(shstrings + sheads[i].sh_name);
+		// printf("sh_offset 0x%x, size 0x%x\n", sheads[i].sh_offset, sheads[i].sh_size);
 		sh = bin + sheads[i].sh_offset;
 		/* the following are function-independent sections. */
 		switch (sheads[i].sh_type) {
@@ -501,6 +474,7 @@ static int load_cubin(struct CUmod_st *mod, const char *bin)
 			else if (!strncmp(sh_name, SH_INFO_FUNC, strlen(SH_INFO_FUNC))) {
 				struct CUfunc_st *func = NULL;
 				struct cuda_raw_func *raw_func = NULL;
+				// printf("sh_name %s\n", sh_name);
 				/* this function does nothing if func is already allocated. */
 				func = malloc_func_if_necessary(mod, sh_name + strlen(SH_INFO_FUNC));
 				if (!func)
@@ -510,6 +484,12 @@ static int load_cubin(struct CUmod_st *mod, const char *bin)
 
 				/* look into the nv.info.@raw_func->name information. */
 				pos = (char *) sh;
+				/*dump nv.info.func information*/
+				/*for(int ii=0; ii<sheads[i].sh_size; ii++) {
+					printf("%x ",*((char*)sh +ii));
+				}
+				printf("\n");*/
+
 				while (pos < (char *) sh + sheads[i].sh_size) {
 					se = (section_entry_t*) pos;
 					ret = cubin_func_type(&pos, se, raw_func);
@@ -590,24 +570,38 @@ static int load_cubin(struct CUmod_st *mod, const char *bin)
 				mod->symbol_count++;
 			 }
 			 break;
-		 case 0x12: /* function symbols */
-			 break;
-		 case 0x22: /* quick hack: FIXME! */
-			 printf("sym_name: %s\n", sym_name);
-			 printf("sh_name: %s\n", sh_name);
-			 printf("st_value: 0x%llx\n", (unsigned long long)sym->st_value);
-			 printf("st_size: 0x%llx\n", (unsigned long long)sym->st_size);
-			 break;
-		 default: /* ??? */
-			 printf("/* unknown symbols: 0x%x\n */", sym->st_info);
-			 goto fail_symbol;
-		 }
+		case 0x12: /* function symbols */
+			break;
+		case 0x22: /* quick hack: FIXME! */
+			// *__cuda_sm20_*_slowpath
+			/*printf("sym_name: %s\n", sym_name);
+			printf("sh_name: %s\n", sh_name);
+			printf("st_value: 0x%llx\n", (unsigned long long)sym->st_value);
+			printf("st_size: 0x%llx\n", (unsigned long long)sym->st_size);*/
+			break;
+		case 0x21: /*C++ class definition*/
+	/*		printf("sym_name: %s\n", sym_name);
+			printf("sh_name: %s\n", sh_name);
+			printf("st_value: 0x%llx\n", (unsigned long long)sym->st_value);
+			printf("st_size: 0x%llx\n", (unsigned long long)sym->st_size);*/
+			break;
+		default: /* ??? */
+			fprintf(stderr, "/* unknown symbols: 0x%x\n */", sym->st_info);
+			fprintf(stderr, "sym_name: %s\n", sym_name);
+			fprintf(stderr, "sh_name: %s\n", sh_name);
+			fprintf(stderr, "st_value: 0x%llx\n", (unsigned long long)sym->st_value);
+			fprintf(stderr, "st_size: 0x%llx\n", (unsigned long long)sym->st_size);
+			goto fail_symbol;
+		}
 	}
 	return 0;
 
 fail_symbol:
+	fprintf(stderr, "Failed to find symbols\n");
 fail_cubin_func_type:
+	fprintf(stderr, "Failed to find func type\n");
 fail_malloc_func:
+	fprintf(stderr, "Failed to malloc func\n");
 	destroy_all_functions(mod);
 
 	return ret;
