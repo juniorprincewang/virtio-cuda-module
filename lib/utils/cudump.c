@@ -188,6 +188,12 @@ static int cubin_func_type
 	case 0x0020: /* ??? */
 		cubin_func_skip(pos, e);
 		break;
+	case 0x0800: /* ./binomialOptions unknown */
+		cubin_func_skip(pos, e);
+		break;
+	case 0x0016: /* ./binomialOptions unknown */
+		cubin_func_skip(pos, e);
+		break;
 	default: /* real unknown */
 		cubin_func_unknown(pos, e);
 		/* return -EINVAL; */
@@ -387,8 +393,9 @@ static int load_cubin(struct CUmod_st *mod, const char *bin)
 	char *shstrings;
 	char *nvrel;
 	int symbols_idx;
-	int nvrel_const_idx,	nvglobal_idx;
+	int nvrel_const_idx, nvrel_idx,	nvglobal_idx;
 	section_entry_t *se;
+	symbol_entry_t *sym_entry;
 	void *sh;
 	char *sh_name;
 	char *pos;
@@ -405,6 +412,7 @@ static int load_cubin(struct CUmod_st *mod, const char *bin)
 	nvrel = NULL;
 	symbols_idx = 0;
 	nvrel_const_idx = 0;
+	nvrel_idx = 0;
 	nvglobal_idx = 0;
 	shstrings = bin + sheads[ehead->e_shstrndx].sh_offset;
 
@@ -422,6 +430,7 @@ static int load_cubin(struct CUmod_st *mod, const char *bin)
 			strings = (char *)sh;
 			break;
 		case SHT_REL: /* relocatable: not sure if nvcc uses it... */
+			nvrel_idx = i;
 			nvrel = (char *)sh;
 			sscanf(sh_name, "%*s%d", &nvrel_const_idx);
 			break;
@@ -518,37 +527,67 @@ static int load_cubin(struct CUmod_st *mod, const char *bin)
 		}
 	}
 
+	/* nv.rel... "__device__" symbols? */
+	for (sym_entry = (symbol_entry_t *)nvrel; 
+		 (void *)sym_entry < (void *)nvrel + sheads[nvrel_idx].sh_size;
+		 sym_entry++) {
+/*		char *sym_name, *sh_name;
+		uint32_t size;
+		sym  = &symbols[se->sym_idx];
+		sym_name = strings + sym->st_name;
+		sh_name = strings + sheads[sym->st_shndx].sh_name;
+		size = sym->st_size;
+		printf("nvrel sym_name %s\n", sym_name);*/
+	}
+
 	/* symbols: __constant__ variable and built-in function names. */
 	for (sym = &symbols[0]; 
 		 (void *)sym < (void *)symbols + sheads[symbols_idx].sh_size; sym++) {
 		 char *sym_name = strings + sym->st_name;
 		 char *sh_name = shstrings + sheads[sym->st_shndx].sh_name;
-		 switch (sym->st_info) {
-		 case 0x0: /* ??? */
-			 break;
-		 case 0x2: /* ??? */
-			 break;
-		 case 0x3: /* ??? */
-			 break;
-		 case 0x1:
-		 case 0x11: /* __device__/__constant__ symbols */
-			 if (sym->st_shndx == nvglobal_idx) { /* __device__ */
-			 }
-			 else { /* __constant__ */
-				 int x;
-				 struct cuda_const_symbol *cs = malloc(sizeof(*cs));
-				 if (!cs) {
-					 ret = -ENOMEM;
-					 goto fail_symbol;
-				 }
-				 sscanf(sh_name, SH_CONST"%d", &x);
-				 cs->idx = x;
-				 cs->name = sym_name;
-				 cs->offset = sym->st_value;
-				 cs->size = sym->st_size;
-				 list_head_init(&cs->list_entry, cs);
-				 list_add(&cs->list_entry, &mod->symbol_list);
-				 mod->symbol_count++;
+		switch (sym->st_info) {
+		case 0x0: /* ??? */
+			break;
+		case 0x2: /* ??? */
+			break;
+		case 0x3: /* ??? */
+			break;
+		case 0x1:
+		case 0x11: /* __device__/__constant__ symbols */
+			if (sym->st_shndx == nvglobal_idx) { /* __device__ */
+				// printf("__device__ %s\n", sym_name);
+				// maybe need anthoer symbol structure
+				int x;
+				struct cuda_const_symbol *cs = malloc(sizeof(*cs));
+				if (!cs) {
+					ret = -ENOMEM;
+					goto fail_symbol;
+				}
+				sscanf(sh_name, SH_CONST"%d", &x);
+				cs->idx = x;
+				cs->name = sym_name;
+				cs->offset = sym->st_value;
+				cs->size = sym->st_size;
+				list_head_init(&cs->list_entry, cs);
+				list_add(&cs->list_entry, &mod->symbol_list);
+				mod->symbol_count++;
+			}
+			else { /* __constant__ */
+				// printf("__constant__ %s\n", sym_name);
+				int x;
+				struct cuda_const_symbol *cs = malloc(sizeof(*cs));
+				if (!cs) {
+					ret = -ENOMEM;
+					goto fail_symbol;
+				}
+				sscanf(sh_name, SH_CONST"%d", &x);
+				cs->idx = x;
+				cs->name = sym_name;
+				cs->offset = sym->st_value;
+				cs->size = sym->st_size;
+				list_head_init(&cs->list_entry, cs);
+				list_add(&cs->list_entry, &mod->symbol_list);
+				mod->symbol_count++;
 			 }
 			 break;
 		 case 0x12: /* function symbols */

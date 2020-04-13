@@ -1084,10 +1084,19 @@ static void remove_port(struct kref *kref);
 static int port_fops_release(struct inode *inode, struct file *filp)
 {
 	struct port *port;
+	struct vgpu_device *vgpu;
+	unsigned long flags;
 
 	func();
 
 	port = filp->private_data;
+	/*cleaning GPU flags */
+	spin_lock_irqsave(&port->portdev->vgpus_lock, flags);
+	list_for_each_entry(vgpu, &port->portdev->vgpus, list) {
+		vgpu->initialized = 0;
+		vgpu->flags = 0;
+	}
+	spin_unlock_irqrestore(&port->portdev->vgpus_lock, flags);
 
 	/* Notify host of port being closed */
 	send_control_msg(port, VIRTIO_CONSOLE_PORT_OPEN, 0);
@@ -1305,62 +1314,6 @@ static struct page ** uaddr_to_pages(const unsigned long __user buf, size_t coun
     }
     // up_read(&current->mm->mmap_sem);
     return page_list;
-}
-static struct virtio_uvm_page * uvirt_to_phys_pages(const unsigned long __user buf, size_t count, int write_flag)
-{
-    int     pages;
-    struct  page **page_list;
-    unsigned int user_pages_flags = 0;
-    phys_addr_t phys = 0;
-    size_t nr_pages = 0;
-    int i=0;
-    struct virtio_uvm_page *page_uvm= NULL;
-
-    func();
-    // if the attribute of mmapped file is O_RDONLY, then FOLL_WRITE will be excluded
-    // So, I decide to leave out the user_pages_flags
-    if (write_flag)
-    	user_pages_flags |= FOLL_WRITE;
-    gldebug("buf 0x%lx, count 0x%lx\n", (unsigned long)buf, count);
-    nr_pages = (buf + count-1)/PAGE_SIZE - buf/PAGE_SIZE + 1;
-    page_list = kvmalloc_array(nr_pages, sizeof(struct page *), GFP_KERNEL);
-    if(!page_list) {
-    	pr_err("get page error.\n"); 
-    	return NULL;
-    }
-    gldebug("page num 0x%lx\n", nr_pages);
-    down_read(&current->mm->mmap_sem);
-    pages = get_user_pages_remote( 
-            current, 
-            current->mm,
-            (unsigned long)buf,
-            nr_pages,
-            user_pages_flags,
-            page_list,
-            NULL,
-            NULL );
-    if(pages <= 0) {
-    	pr_err("get_user_pages_remote return error\n");
-    	up_read(&current->mm->mmap_sem);
-    	return NULL;
-    }
-    // bytes = pages * PAGE_SIZE - 
-    gldebug("page num = 0x%lx, get_user_pages_remote return %x\n", nr_pages, pages);
-    page_uvm = kmalloc(sizeof(struct virtio_uvm_page), GFP_KERNEL);
-	page_uvm->block_num = nr_pages;
-	page_uvm->uvm_start = buf;
-	page_uvm->uvm_end 	= buf+count;
-	page_uvm->blocks = kmalloc(sizeof(unsigned long)*nr_pages, GFP_KERNEL);
-    for(i=0; i<pages; i++) {
-            phys = page_to_phys(page_list[i]);
-            gldebug("page mmaped phys 0x%llx.\n", phys);
-            put_page(page_list[i]);
-            page_uvm->blocks[i] = phys;
-    }
-    up_read(&current->mm->mmap_sem);
-    kvfree(page_list);
-    // return virt_to_phys(page_uvm->blocks);
-    return page_uvm;
 }
 
 void send_sgs_to_virtio(struct port *port, struct scatterlist *sg[], int out_nr, int in_nr)
@@ -1823,13 +1776,13 @@ int cuda_launch_kernel(VirtIOArg __user *arg, struct port *port)
 	sg_init_one(&offset_sg, offset_buf, offset_buf_size);
 	sgs[2] = &offset_sg;
 
-	#ifdef VIRTIO_LOCK
+#ifdef VIRTIO_LOCK
 	spin_lock(&port->io_lock);
-	#endif
+#endif
 	send_sgs_to_virtio(port, sgs, 3, 0);
-	#ifdef VIRTIO_LOCK
+#ifdef VIRTIO_LOCK
 	spin_unlock(&port->io_lock);
-	#endif
+#endif
 
 	gldebug("[+] now analyse return buf\n");
 	gldebug("[+] arg->cmd = %d\n", payload->cmd);
@@ -2147,13 +2100,13 @@ int cuda_memcpy_to_symbol(VirtIOArg __user *arg, struct port *port)
 	sgs[num_out++] = &src_sg;
 	payload->nr_elem = num_out+num_in;
 
-	#ifdef VIRTIO_LOCK
+#ifdef VIRTIO_LOCK
 	spin_lock(&port->io_lock);
-	#endif
+#endif
 	send_sgs_to_virtio(port, sgs, num_out, num_in);
-	#ifdef VIRTIO_LOCK
+#ifdef VIRTIO_LOCK
 	spin_unlock(&port->io_lock);
-	#endif
+#endif
 
 	gldebug("[+] now analyse return buf\n");
 	gldebug("[+] arg->cmd = %d\n", payload->cmd);
@@ -2195,13 +2148,13 @@ int cuda_memcpy_from_symbol(VirtIOArg __user *arg, struct port *port)
 	sgs[num_out + num_in++] = &host_sg;
 	payload->nr_elem = num_out+num_in;
 
-	#ifdef VIRTIO_LOCK
+#ifdef VIRTIO_LOCK
 	spin_lock(&port->io_lock);
-	#endif
+#endif
 	send_sgs_to_virtio(port, sgs, num_out, num_in);
-	#ifdef VIRTIO_LOCK
+#ifdef VIRTIO_LOCK
 	spin_unlock(&port->io_lock);
-	#endif
+#endif
 
 	gldebug("[+] now analyse return buf\n");
 	gldebug("[+] arg->cmd = %d\n", payload->cmd);
@@ -2922,139 +2875,7 @@ static int cuda_memcpy(VirtIOArg __user *arg, struct port *port)
 
 int cuda_memcpy_async(VirtIOArg __user *arg, struct port *port)
 {
-	VirtIOArg *payload;
-	uint32_t src_size;
-	int ret = 0;
-	int found = 0;
-	struct virtio_uvm_page *pages;
-
-	func();
-	payload = (VirtIOArg *)memdup_user(arg, ARG_SIZE);
-	if(!payload) {
-		pr_err("[ERROR] can not malloc 0x%lx memory\n", ARG_SIZE);
-		return -ENOMEM;
-	}
-	gldebug("src=0x%llx, srcSize=0x%x, dst=0x%llx, dstSize=0x%x,"
-			" kind=%llu, param=0x%llx\n",
-			payload->src, payload->srcSize, payload->dst, payload->dstSize,
-			payload->flag, payload->param);
-	src_size = payload->srcSize;
-	if (payload->flag == 1) {
-	// cudaMemcpyHostToDevice
-		if((found = find_addr_in_mol(payload->dst, port)) != 0) {
-			ret = -ENOMEM;
-			goto RETAsync;
-		}
-HtoDAsync:
-		payload->param = 1;
-		if(!find_page_by_addr(payload->src, port)) {
-			payload->param  = 0;
-			pages = uvirt_to_phys_pages((unsigned long __user)payload->src, src_size, 0);
-			if(!pages) {
-				pr_err("[ERROR] Failed to mmap\n");
-				ret = -ENOMEM;
-				goto RETAsync;
-			}
-			payload->param2  	= (uint64_t)virt_to_phys(pages->blocks);
-			payload->paramSize 	= (uint32_t)pages->block_num;
-		}
-		#ifdef VIRTIO_LOCK
-		spin_lock(&port->io_lock);
-		#endif
-
-		ret = send_to_virtio(port, (void *)payload, ARG_SIZE);
-		#ifdef VIRTIO_LOCK
-		spin_unlock(&port->io_lock);
-		#endif
-
-		gldebug("[+] now analyse return buf\n");
-		gldebug("[+] arg->cmd = %d\n", payload->cmd);
-		put_user(payload->cmd, &arg->cmd);
-	} else if(payload->flag == 2) {
-	// cudaMemcpyDeviceToHost
-		if((found = find_addr_in_mol(payload->src, port)) != 0){
-			ret = -ENOMEM;
-			goto RETAsync;
-		}
-DtoHAsync:
-		payload->param = 1;
-		if(!find_page_by_addr(payload->dst, port)) {
-			payload->param 	= 0;
-			pages = uvirt_to_phys_pages((unsigned long __user)payload->dst, src_size, 1);
-			if(!pages) {
-				pr_err("[ERROR] Failed to mmap\n");
-				ret = -ENOMEM;
-				goto RETAsync;
-			}
-			payload->param2  	= (uint64_t)virt_to_phys(pages->blocks);
-			payload->paramSize 	= (uint32_t)pages->block_num;
-		}
-		#ifdef VIRTIO_LOCK
-		spin_lock(&port->io_lock);
-		#endif
-
-		ret = send_to_virtio(port, (void*)payload, ARG_SIZE);
-		#ifdef VIRTIO_LOCK
-		spin_unlock(&port->io_lock);
-		#endif
-
-		gldebug("[+] now analyse return buf\n");
-		gldebug("[+] arg->cmd = %d\n", payload->cmd);
-		put_user(payload->cmd, &arg->cmd);
-	} else if(payload->flag == 3) {
-	// cudaMemcpyDeviceToDevice 
-		if((found = find_addr_in_mol(payload->src, port)) != 0){
-			ret = -ENOMEM;
-			goto RETAsync;
-		}
-		if((found = find_addr_in_mol(payload->dst, port)) != 0){
-			ret = -ENOMEM;
-			goto RETAsync;
-		}
-DtoDAsync:
-		#ifdef VIRTIO_LOCK
-		spin_lock(&port->io_lock);
-		#endif
-
-		ret = send_to_virtio(port, (void*)payload, ARG_SIZE);
-		#ifdef VIRTIO_LOCK
-		spin_unlock(&port->io_lock);
-		#endif
-
-		gldebug("[+] now analyse return buf\n");
-		gldebug("[+] arg->cmd = %d\n", payload->cmd);
-		put_user(payload->cmd, &arg->cmd);
-		
-	}  else if(payload->flag == 4) {
-		gldebug("[+] cudaMemcpyDefault!\n");
-		if((found = find_addr_in_mol(payload->src, port))!= 0 ) {
-			if((found = find_addr_in_mol(payload->dst, port))!= 0 ) {
-				put_user(0, &arg->flag);
-				goto HtoHAsync;
-			}
-			else {
-				payload->flag = 1;
-				goto HtoDAsync;
-			}
-		} else {
-			if((found = find_addr_in_mol(payload->dst, port))!= 0 ) {
-				payload->flag = 2;
-				goto DtoHAsync;
-			}
-			else {
-				payload->flag = 3;
-				goto DtoDAsync;
-			}
-		}
-	} else if (payload->flag == 0){
-HtoHAsync:
-		gldebug("[+] cudaMemcpyHostToHost!\n");
-	} else {
-		pr_err("[+] should not be here!\n");
-	}
-RETAsync:
-	kfree(payload);
-	return ret;
+	return 0;
 }
 
 static int cuda_memset(VirtIOArg __user *arg, struct port *port)
@@ -3242,29 +3063,8 @@ static int cuda_set_device_flags(VirtIOArg __user *arg, struct port *port)
 
 int cuda_device_set_cache_config(VirtIOArg __user *arg, struct port *port)
 {
-	VirtIOArg *payload;
-	int ret;
-
 	func();
-	payload = (VirtIOArg *)memdup_user(arg, ARG_SIZE);
-	if(!payload) {
-		pr_err("[ERROR] can not malloc 0x%lx memory\n", ARG_SIZE);
-		return -ENOMEM;
-	}
-	#ifdef VIRTIO_LOCK
-	spin_lock(&port->io_lock);
-	#endif
-
-	ret = send_to_virtio(port, (void*)payload, ARG_SIZE);
-	#ifdef VIRTIO_LOCK
-	spin_unlock(&port->io_lock);
-	#endif
-
-	gldebug("[+] now analyse return buf\n");
-	gldebug("[+] arg->cmd = %d\n", payload->cmd);
-	put_user(payload->cmd, &arg->cmd);
-	kfree(payload);
-	return ret;
+	return send_single_payload(arg, port);
 }
 
 static int cuda_device_reset(VirtIOArg __user *arg, struct port *port)
@@ -3279,13 +3079,31 @@ static int cuda_device_reset(VirtIOArg __user *arg, struct port *port)
 		put_user(10, &arg->cmd);
 		return -EACCES;
 	}
+	if(!vgpu->initialized) {
+		put_user(0, &arg->cmd);
+		return 0;
+	}
 	vgpu->initialized = 0;
+	vgpu->flags = 0;
 	return send_single_payload(arg, port);
 }
 
 static int cuda_device_synchronize(VirtIOArg __user *arg, struct port *port)
 {
+	struct vgpu_device *vgpu;
+
 	func();
+	vgpu = find_gpu_by_device(port->portdev, port->device);
+	if (!vgpu) {
+		pr_err("Failed to find properties of device id %d.\n", port->device);
+		// cudaErrorInvalidDevice                =     10,
+		put_user(10, &arg->cmd);
+		return -EACCES;
+	}
+	if(!vgpu->initialized) {
+		put_user(0, &arg->cmd);
+		return 0;
+	}
 	return send_single_payload(arg, port);
 }
 

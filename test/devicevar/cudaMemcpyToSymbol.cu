@@ -13,17 +13,10 @@ __global__ void test(float *a, int size, int value)
         a[idx] = dfactor;
 }
 
-__global__ void test2(float *a, int size, float *b)
+__global__ void test2()
 {
-    int idx = threadIdx.x;
-    if(idx<size)
-        a[idx] = dfactor;
-}
-
-__global__ void test3(float *a)
-{
-    int idx = threadIdx.x;
-    a[idx] = dfactor;
+    float a = dfactor;
+    a +=1.0;
 }
 
 int main(void)
@@ -32,6 +25,7 @@ int main(void)
     float factor=9.0f;
     float h_factor = 0;
     cudaMemcpyToSymbol(dfactor, &factor, sizeof(float), 0, cudaMemcpyHostToDevice);
+    test2<<<1,1>>>();
     cudaMemcpyFromSymbol(&h_factor, dfactor, sizeof(float), 0, cudaMemcpyDeviceToHost);
     printf("host factor = %f\n", h_factor);
     

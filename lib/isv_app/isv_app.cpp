@@ -606,7 +606,7 @@ extern "C" void** __cudaRegisterFatBinary(void *fatCubin)
         dump_cuda_symbol(mod);
         dump_cuda_kernel(mod);
     #endif
-
+        
         // initialize arguments
         memset(&arg, 0, ARG_LEN);
         size = (uint32_t)(fatHeader->headerSize + fatHeader->fatSize);
@@ -991,7 +991,7 @@ extern "C" cudaError_t cudaLaunchKernel(
     kernel_param->param_nr = raw_func->param_count;
     kernel_param->param_size = raw_func->param_size;
     param_data = raw_func->param_data;
-    param_offset_list = (uint32_t *)malloc(sizeof(uint32_t)*raw_func->param_count);
+    param_offset_list = (uint32_t *)malloc(sizeof(uint32_t)*(raw_func->param_count+1));
     while (param_data) {
         debug("\tparam{%d, 0x%x, 0x%x},\n", 
                    param_data->idx, 
@@ -1002,13 +1002,6 @@ extern "C" cudaError_t cudaLaunchKernel(
         param_offset_list[param_data->idx] = (uint32_t)param_data->offset;
         param_data = param_data->next;
     }
-    /*
-    args = {&arg0, &arg1};
-    debug("ptr=%p, content=%p\n", args[0], *((void**)args[0]));
-    debug("ptr=%p, content=%f\n", args[1], *(float*)args[1]);
-    if (args[2] == NULL)
-        debug("NULL\n");
-    */
 
     memset(&arg, 0, sizeof(VirtIOArg));
     arg.cmd = VIRTIO_CUDA_LAUNCH_KERNEL;
@@ -1016,7 +1009,7 @@ extern "C" cudaError_t cudaLaunchKernel(
     arg.srcSize = buf_size;
     arg.flag    = (uint64_t)hostFunc;
     arg.param   = (uint64_t)param_offset_list;
-    arg.paramSize   = sizeof(uint32_t)*raw_func->param_count;
+    arg.paramSize   = sizeof(uint32_t)*(raw_func->param_count+1);
     arg.tid     = (uint32_t)syscall(SYS_gettid);
     send_to_device(VIRTIO_IOC_LAUNCH_KERNEL, &arg);
     ctx->result = (CUresult)arg.cmd;
