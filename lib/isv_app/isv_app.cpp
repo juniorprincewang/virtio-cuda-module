@@ -221,17 +221,11 @@ static void *my_malloc(size_t size)
 {
     debug("malloc 0x%lx\n", size);
     size = roundup(size, 0x200);
-    // if (size >= KMALLOC_SIZE)
-        return __mmalloc(size);
-    // return __libc_malloc(size);
+    return __mmalloc(size);
 }
 
 static void my_free(void *ptr)
 {
-    // if() {
-    //     __libc_free(ptr);
-    //     return;
-    // }
     munmap(ptr, 0);
 }
 
@@ -973,7 +967,7 @@ extern "C" cudaError_t cudaLaunchKernel(
     debug("kernel name %s\n", raw_func->name);
     debug("kernel param count %d\n", raw_func->param_count);
     debug("kernel param size %d\n", raw_func->param_size);
-    buf_size = sizeof(struct CUkernel_st)  + raw_func->param_size;
+    buf_size = sizeof(struct CUkernel_st)  + raw_func->param_size + raw_func->param_count*sizeof(uint32_t);
     kernel_param = (struct CUkernel_st*)malloc(buf_size);
     kernel_param->grid_x = kernelConf.gridDim.x;
     kernel_param->grid_y = kernelConf.gridDim.y;
@@ -991,7 +985,7 @@ extern "C" cudaError_t cudaLaunchKernel(
     kernel_param->param_nr = raw_func->param_count;
     kernel_param->param_size = raw_func->param_size;
     param_data = raw_func->param_data;
-    param_offset_list = (uint32_t *)malloc(sizeof(uint32_t)*(raw_func->param_count+1));
+    param_offset_list = (uint32_t *)(kernel_param->param_buf+raw_func->param_size);
     while (param_data) {
         debug("\tparam{%d, 0x%x, 0x%x},\n", 
                    param_data->idx, 
@@ -1008,10 +1002,9 @@ extern "C" cudaError_t cudaLaunchKernel(
     arg.src = (uint64_t)kernel_param;
     arg.srcSize = buf_size;
     arg.flag    = (uint64_t)hostFunc;
-    arg.param   = (uint64_t)param_offset_list;
-    arg.paramSize   = sizeof(uint32_t)*(raw_func->param_count+1);
     arg.tid     = (uint32_t)syscall(SYS_gettid);
     send_to_device(VIRTIO_IOC_LAUNCH_KERNEL, &arg);
+    free(kernel_param);
     ctx->result = (CUresult)arg.cmd;
     return (cudaError_t)arg.cmd;
 }
@@ -1344,7 +1337,6 @@ extern "C" cudaError_t cudaMallocHost(void **ptr, size_t size)
 
 extern "C" cudaError_t cudaFreeHost(void *ptr)
 {
-    BlockHeader* blk = NULL;
     func();
     // api_inc(API_MEM);
     init_primary_context();
@@ -1772,7 +1764,6 @@ extern "C" cudaError_t cudaGetLastError(void)
 
 extern "C" cudaError_t cudaPeekAtLastError(void)
 {
-    VirtIOArg arg;
     func();
     api_inc(API_ERROR);
     init_primary_context();

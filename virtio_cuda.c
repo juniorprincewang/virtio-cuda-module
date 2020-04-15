@@ -271,7 +271,6 @@ struct port {
 
 	/* list for struct virtio_uvm_page*/
 	struct list_head page;
-	unsigned int block_size;
 	/*
 	 * To protect the operations on the in_vq associated with this
 	 * port.  Has to be a spinlock because it can be called from
@@ -1233,42 +1232,6 @@ static struct virtio_uvm_page *find_pages_by_addr(unsigned long addr,
 	return NULL;
 }
 
-static unsigned long *find_gpa_array_start_addr(uint64_t addr, size_t size, 
-				struct port *port, uint32_t *offset_ret, uint32_t *blocks_ret)
-{
-	unsigned long *gpa_array=NULL;
-	unsigned int start_block, start_offset, end_block;
-	size_t offset=0;
-	size_t len=0;
-	size_t blocks=0;
-	int i=0;
-	struct virtio_uvm_page *page = find_page_by_addr(addr, port);
-	if(!page) {
-		gldebug("No such addr 0x%llx with size 0x%lx\n", addr, size);
-		return NULL;
-	}
-	offset = addr - page->uvm_start;
-	*offset_ret = offset;
-	start_block = offset/port->block_size;
-	end_block = (offset + size-1)/port->block_size;
-	start_offset = offset%port->block_size;
-	blocks = end_block - start_block+1;
-	*blocks_ret = blocks;
-	gpa_array = (unsigned long*)kmalloc(blocks*sizeof(uint64_t), GFP_KERNEL);
-	gpa_array[0]=virt_to_phys((void*)(page->blocks[start_block]));
-	len = size < (port->block_size-start_offset) ? 
-								size : port->block_size-start_offset;
-	size -= len;
-	i = 1;
-	while(size>0) {
-		gpa_array[i] = virt_to_phys((void*)page->blocks[start_block+i]);
-		len = size < port->block_size ? size : port->block_size;
-		size -= len;
-		i++;
-	}
-	return gpa_array;
-}
-
 static struct page ** uaddr_to_pages(const unsigned long __user buf, size_t count, int write_flag)
 {
     int     pages;
@@ -1747,9 +1710,10 @@ int cuda_launch(VirtIOArg __user *arg, struct port *port)
 int cuda_launch_kernel(VirtIOArg __user *arg, struct port *port)
 {
 	VirtIOArg *payload;
-	void *para, *offset_buf;
-	uint32_t para_buf_size, offset_buf_size;
-	struct scatterlist *sgs[3], arg_sg, param_sg, offset_sg;
+	void *para;
+	uint32_t para_buf_size;
+	struct scatterlist *sgs[2], arg_sg, param_sg;
+	int num_out=0, num_in=0;
 
 	func();
 	payload = (VirtIOArg *)memdup_user(arg, ARG_SIZE);
@@ -1763,31 +1727,23 @@ int cuda_launch_kernel(VirtIOArg __user *arg, struct port *port)
 		pr_err("[ERROR] can not malloc 0x%x memory\n", para_buf_size);
 		return -ENOMEM;
 	}
-	offset_buf_size = payload->paramSize;
-	offset_buf = memdup_user((const void __user *)payload->param, (size_t)offset_buf_size);
-	if(!offset_buf) {
-		pr_err("[ERROR] can not malloc 0x%x memory\n", offset_buf_size);
-		return -ENOMEM;
-	}
+
 	sg_init_one(&arg_sg, payload, sizeof(*payload));
-	sgs[0] = &arg_sg;
+	sgs[num_out++] = &arg_sg;
 	sg_init_one(&param_sg, para, para_buf_size);
-	sgs[1] = &param_sg;
-	sg_init_one(&offset_sg, offset_buf, offset_buf_size);
-	sgs[2] = &offset_sg;
+	sgs[num_out++] = &param_sg;
 
 #ifdef VIRTIO_LOCK
 	spin_lock(&port->io_lock);
 #endif
-	send_sgs_to_virtio(port, sgs, 3, 0);
+	send_sgs_to_virtio(port, sgs, num_out, num_in);
 #ifdef VIRTIO_LOCK
 	spin_unlock(&port->io_lock);
 #endif
 
 	gldebug("[+] now analyse return buf\n");
 	gldebug("[+] arg->cmd = %d\n", payload->cmd);
-	put_user(payload->cmd, &arg->cmd);
-	kfree(offset_buf);
+	copy_to_user(arg, payload, ARG_SIZE);
 	kfree(para);
 	kfree(payload);
 	return 0;
@@ -1814,97 +1770,6 @@ int cuda_malloc_host(VirtIOArg __user *arg, struct port *port)
 int cuda_free_host(VirtIOArg __user *arg, struct port *port)
 {
 	return 0;
-}
-
-int cuda_mmapctl(VirtIOArg __user *arg, struct port *port)
-{
-	VirtIOArg *payload;
-	int ret;
-	int blocks=0;
-	unsigned long *phys_addr_pack=NULL;
-	uint32_t src_size;
-	void *h_mem=NULL;
-	
-	func();
-	payload = (VirtIOArg *)memdup_user(arg, ARG_SIZE);
-	if(!payload) {
-		pr_err("[ERROR] can not malloc 0x%lx memory\n", ARG_SIZE);
-		return -ENOMEM;
-	}
-	src_size = payload->srcSize;
-	phys_addr_pack = find_gpa_array_start_addr(payload->src, src_size, port,
-											   &payload->dstSize, &blocks);
-	if(!phys_addr_pack) {
-		pr_err("[ERROR] Failed to find mmap address 0x%llx , "
-			   "size 0x%x memory\n", payload->src, src_size);
-		payload->param = 0;
-		h_mem = memdup_user((const void __user *)payload->src, 
-							(size_t)src_size);
-		if(!h_mem) {
-			pr_err("[ERROR] can not malloc 0x%x memory\n", src_size);	
-			return -ENOMEM;
-		}
-		payload->dst = (uint64_t)virt_to_phys(h_mem);
-	} else {
-		payload->param = blocks;
-		/*keep src, in case calculate the offset*/
-		payload->dst = (uint64_t)virt_to_phys(phys_addr_pack);
-	}
-	#ifdef VIRTIO_LOCK
-	spin_lock(&port->io_lock);
-	#endif
-
-	ret = send_to_virtio(port, (void *)payload, ARG_SIZE);
-	#ifdef VIRTIO_LOCK
-	spin_unlock(&port->io_lock);
-	#endif
-
-	gldebug("[+] now analyse return buf\n");
-	kfree(phys_addr_pack);
-	kfree(payload);
-	return ret;
-}
-
-int cuda_munmapctl(VirtIOArg __user *arg, struct port *port)
-{
-	VirtIOArg *payload;
-	int ret;
-	int blocks=0;
-	unsigned long *phys_addr_pack=NULL;
-	uint32_t src_size;
-	
-	func();
-	payload = (VirtIOArg *)memdup_user(arg, ARG_SIZE);
-	if(!payload) {
-		pr_err("[ERROR] can not malloc 0x%lx memory\n", ARG_SIZE);
-		return -ENOMEM;
-	}
-	src_size = payload->srcSize;
-	phys_addr_pack = find_gpa_array_start_addr(payload->src, src_size, port,
-											   &payload->dstSize, &blocks);
-	if(!phys_addr_pack) {
-		payload->param = 0;
-		pr_err("[ERROR] Failed to find mmap address 0x%llx , "
-			   "size 0x%x memory\n", payload->src, src_size);
-		return -ENOMEM;
-	} else {
-		payload->param = blocks;
-		/*keep src, in case calculate the offset*/
-		payload->dst = (uint64_t)virt_to_phys(phys_addr_pack);
-	}
-	#ifdef VIRTIO_LOCK
-	spin_lock(&port->io_lock);
-	#endif
-
-	ret = send_to_virtio(port, (void *)payload, ARG_SIZE);
-	#ifdef VIRTIO_LOCK
-	spin_unlock(&port->io_lock);
-	#endif
-
-	gldebug("[+] now analyse return buf\n");
-	kfree(phys_addr_pack);
-	kfree(payload);
-	return ret;
 }
 
 static int cuda_host_register(VirtIOArg __user *arg, struct port *port)
@@ -4203,12 +4068,6 @@ static long port_fops_ioctl(struct file *filp, unsigned int cmd, unsigned long a
 		case VIRTIO_IOC_GETDEVICEPROPERTIES:
 			cuda_get_device_properties((VirtIOArg __user*)arg, port);
 			break;
-		case VIRTIO_IOC_MMAPCTL:
-			cuda_mmapctl((VirtIOArg __user*)arg, port);
-			break;
-		case VIRTIO_IOC_MUNMAPCTL:
-			cuda_munmapctl((VirtIOArg __user*)arg, port);
-			break;
 		case VIRTIO_IOC_SETDEVICE:
 			cuda_set_device((VirtIOArg __user*)arg, port);
 			break;
@@ -4841,7 +4700,6 @@ static int add_port(struct ports_device *portdev, u32 id)
 	INIT_LIST_HEAD(&port->guest_mem_list);
 	INIT_LIST_HEAD(&port->page);
 	spin_lock_init(&port->io_lock);
-	port->block_size = KMALLOC_SIZE;
 	/*
 	 * Tell the Host we're set so that it can send us various
 	 * configuration parameters for this port (eg, port name,

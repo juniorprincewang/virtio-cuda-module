@@ -54,6 +54,7 @@ main(void)
     int numElements = 1<<22;
     size_t size = numElements * sizeof(float);
     printf("[Vector addition of %d elements]\n", numElements);
+    printf("[Vector size 0x%lx bytes]\n", size);
 
     // Allocate the host input vector A
     float *h_A = (float *)malloc(size);

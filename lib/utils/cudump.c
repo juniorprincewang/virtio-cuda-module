@@ -618,7 +618,7 @@ static int load_file(char **pbin, const char *fname)
 {
 	char *bin;
 	FILE *fp;
-	uint32_t len;
+	size_t len;
 
 	if (!(fp = fopen(fname, "rb")))
 		return -ENOENT;

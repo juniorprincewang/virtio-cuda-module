@@ -77,7 +77,7 @@ int main()
 	float *d_a=0, *d_b;
 	float *h_a=0;
 	dim3 block, grid;
-	int num = 1 << 14;
+	int num = 1 << 22;
     int nbytes = num * sizeof(float);
     float value=41;
     struct timeval malloc_start, malloc_end;
