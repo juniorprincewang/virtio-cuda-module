@@ -179,7 +179,6 @@ typedef struct VirtIOArg
 	uint64_t param;
 	uint32_t paramSize;
 	uint64_t param2;
-	uint32_t nr_elem;
 	uint64_t stream;
 	uint64_t event;
 	uint64_t event2;
