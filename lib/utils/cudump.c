@@ -46,8 +46,7 @@ static int cubin_func_0a04
 	return 0;
 }
 
-static int cubin_func_0c04
-(char **pos, section_entry_t *e, struct cuda_raw_func *raw_func)
+static int cubin_func_0c04(char **pos, section_entry_t *e)
 {
 	*pos += sizeof(section_entry_t);
 	/* e->size is a parameter size, but how can we use it here? */
@@ -98,8 +97,6 @@ static int cubin_func_1704
 static int cubin_func_1903
 (char **pos, section_entry_t *e, struct cuda_raw_func *raw_func)
 {
-	int ret;
-	char *pos2;
 	// 3 19 1c 0 
 	*pos += sizeof(section_entry_t);
 	raw_func->param_size = e->size;
@@ -120,7 +117,7 @@ static int cubin_func_1e04
 	return 0;
 }
 
-static void cubin_func_1b03(char **pos, section_entry_t *e)
+static void cubin_func_1b03(char **pos)
 {
 	// 3 1b ffffffff 0 
 	// or 3 1b 3f 0
@@ -138,7 +135,7 @@ static int cubin_func_type
 		return cubin_func_0a04(pos, e, raw_func);
 	case 0x0b04: /* 4-byte align data relevant to params (sm_13) */
 	case 0x0c04: /* 4-byte align data relevant to params (sm_20) */
-		return cubin_func_0c04(pos, e, raw_func);
+		return cubin_func_0c04(pos, e);
 	case 0x0d04: /* stack information, hmm... */
 		return cubin_func_0d04(pos, e, raw_func);
 	case 0x1204: /* some counters but what is this? */
@@ -153,7 +150,7 @@ static int cubin_func_type
 	case 0x1e04: /* crs stack size information */
 		return cubin_func_1e04(pos, e, raw_func);
 	case 0x1b03: /*sm 35 unknow*/
-		cubin_func_1b03(pos, e);
+		cubin_func_1b03(pos);
 		break;
 	case 0x1c04: /*fix me*/
 		cubin_func_skip(pos, e);
@@ -189,7 +186,7 @@ static void destroy_all_symbols(struct CUmod_st *mod)
 
 static void destroy_all_functions(struct CUmod_st *mod)
 {
-	struct CUfunc_st *func, *func2;
+	struct CUfunc_st *func;
 	struct cuda_raw_func *raw_func;
 	struct cuda_param *param_data;
 	struct list_head *p, *head;

@@ -61,7 +61,7 @@ void test_hostregister()
 
 void test_hostalloc()
 {
-    int ns = 1<<20;
+    int ns = 1<<12;
     int data_size = ns * sizeof(int);
     int * host_p;
     checkCudaErrors(
@@ -70,7 +70,7 @@ void test_hostalloc()
 }
 
 int main(void) {  
-    int ns = 1<<18;
+    int ns = 1<<13;
     // int ns = 1<<3;
     int data_size = ns * sizeof(int);
     int * host_p;
@@ -80,6 +80,10 @@ int main(void) {
     int value = 10;
     dim3 block, grid;
     size_t page_size = 0;
+
+    // test_hostregister();
+    // test_hostalloc();
+    // return 0;
     
     page_size = sysconf(_SC_PAGE_SIZE);
     printf("Page size is 0x%lx\n", page_size);
@@ -100,6 +104,7 @@ int main(void) {
     printf("dev p is at %p\n", dev_p);
 
     /* Initialise host_p*/
+    host_p[0] = 1;
     memset(host_p, 0, data_size);
     /* Transfer data to the device host_p .. dev_p */
     checkCudaErrors(

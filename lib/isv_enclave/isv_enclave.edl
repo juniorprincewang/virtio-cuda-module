@@ -73,6 +73,14 @@ enclave {
                                             uint32_t secret_size,
                                             [out,count=16] uint8_t* gcm_mac) 
                                             transition_using_threads;
+        public sgx_status_t aead_request_encrypt(sgx_ra_context_t context, 
+                                            [in,size=secret_size] uint8_t* p_secret,
+                                            uint32_t secret_size,
+                                            [out,count=secret_size] uint8_t* p_encrypt_secret,
+                                            [in,size=aad_len] uint8_t *p_aad,
+                                            uint32_t aad_len,
+                                            [out,count=16] uint8_t* gcm_mac) 
+                                            transition_using_threads;
     };
 
     untrusted {

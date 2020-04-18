@@ -51,12 +51,20 @@ static char enclave_path[256];
     #define debug_clean(fmt, arg...) do{printf("" fmt, ##arg);}while(0)
     #define api_inc(n) do {cuda_api_count[n]++; } while(0)
     #define mem_inc(n, size) do {accum_memcpy_size[n]+=size; } while(0)
+    #define DPRINT_TAGS(tags) do {  \
+                                    printf("payload tag\n");    \
+                                    for (int k=0; k<SAMPLE_SP_TAG_SIZE; k++) { \
+                                        printf("%x ", tags[k]); \
+                                    } \
+                                    printf("\n\n"); \
+                                } while (0)
 #else
     #define debug(fmt, arg...) 
     #define func() 
     #define debug_clean(fmt, arg...)  
     #define api_inc(n) 
     #define mem_inc(n, size) 
+    #define DPRINT_TAGS(tags)   
 #endif
 
 #define error(fmt, arg...) printf("[ERROR]: %s->line : %d. " fmt, __FUNCTION__, __LINE__, ##arg)
@@ -101,14 +109,6 @@ extern "C" void *__libc_malloc(size_t);
 extern "C" void __libc_free(void *ptr);
 static size_t map_offset=0;
 static size_t const BLOCK_MAGIC = 0xdeadbeaf;
-
-typedef struct block_header
-{
-    void* address;
-    size_t total_size;
-    size_t data_size;
-    size_t magic;
-} BlockHeader;
 
 typedef struct sgx_ra_env
 {
@@ -179,19 +179,6 @@ void send_to_device(int cmd, void *arg)
     #endif
 }
 
-BlockHeader* get_block_by_ptr(void* p)
-{
-    void* ptr = (char*)p - sizeof(BlockHeader);
-    BlockHeader* blk = (BlockHeader*)ptr;
-
-    if (blk->magic != BLOCK_MAGIC)
-    {
-        // debug("no magic 0x%lx\n", BLOCK_MAGIC);
-        return NULL;
-    }
-    return blk;
-}
-
 static size_t roundup(size_t n, size_t alignment)
 {
     return (n+(alignment-1))/alignment * alignment;
@@ -244,22 +231,14 @@ static void get_mac(uint8_t *data, uint32_t size, uint8_t *payload_tag)
                         "0x%0x. status = 0x%0x", ret, status);
         return;
     }
-    debug("payload tag\n");
-    for (int k=0; k<SAMPLE_SP_TAG_SIZE; k++) {
-        debug_clean("%x ", payload_tag[k]);
-    }
-    debug_clean("\n\n");
+    DPRINT_TAGS(payload_tag);
 }
 
 static void get_decrypted_data(uint8_t *src, uint32_t size, uint8_t *dst, uint8_t *payload_tag)
 {
     sgx_status_t status;
     int ret;
-    debug("payload tag\n");
-    for (int k=0; k<SAMPLE_SP_TAG_SIZE; k++) {
-        debug_clean("%x ", payload_tag[k]);
-    }
-    debug_clean("\n\n");
+    DPRINT_TAGS(payload_tag);
     ret = decrypt_data(sgx_env.enclave_id, &status, sgx_env.context, 
                             src, size, dst, payload_tag);
     if((SGX_SUCCESS != ret)  || (SGX_SUCCESS != status))
@@ -270,23 +249,21 @@ static void get_decrypted_data(uint8_t *src, uint32_t size, uint8_t *dst, uint8_
     }
 }
 
-static void get_encrypted_data(uint8_t *src, uint32_t size, uint8_t *dst, uint8_t *payload_tag)
+static void get_encrypted_data( uint8_t *dst, uint8_t *src, uint32_t size, 
+                                uint8_t *aad, uint32_t aad_len,
+                                uint8_t *payload_tag)
 {
     sgx_status_t status;
     int ret;
-    ret = encrypt_data(sgx_env.enclave_id, &status, sgx_env.context, 
-                            src, size, dst, payload_tag);
+    ret = aead_request_encrypt(sgx_env.enclave_id, &status, sgx_env.context, 
+                            src, size, dst, aad, aad_len, payload_tag);
     if((SGX_SUCCESS != ret)  || (SGX_SUCCESS != status))
     {
         error("Error, encrypt data using SK based AESGCM failed. ret = "
                         "0x%0x. status = 0x%0x\n", ret, status);
         return;
     }
-    debug("payload tag\n");
-    for (int k=0; k<SAMPLE_SP_TAG_SIZE; k++) {
-        debug_clean("%x ", payload_tag[k]);
-    }
-    debug_clean("\n\n");
+    DPRINT_TAGS(payload_tag);
 }
 // end of crypto helper
 /**************************************************/
@@ -295,21 +272,19 @@ static void get_encrypted_data(uint8_t *src, uint32_t size, uint8_t *dst, uint8_
 static void init_primary_context()
 {
     VirtIOArg arg;
-#ifdef ENABLE_MAC
-    uint8_t payload_tag[SAMPLE_SP_TAG_SIZE];
-#endif
     if(!ctx->primary_context_initialized) {
         ctx->primary_context_initialized = 1;
         memset(&arg, 0, ARG_LEN);
         debug("nr_binary %x\n", p_binary->nr_binary);
-#ifdef ENABLE_MAC
-        get_mac((uint8_t *)p_binary, p_binary->total_size, payload_tag);
-        memcpy(arg.mac, payload_tag, SAMPLE_SP_TAG_SIZE);
-#endif
         arg.src     = (uint64_t)p_binary;
         arg.srcSize = p_binary->total_size;
         arg.cmd     = VIRTIO_CUDA_PRIMARYCONTEXT;
         arg.tid     = (uint32_t)syscall(SYS_gettid);
+#ifdef ENABLE_MAC
+        get_mac((uint8_t *)p_binary, p_binary->total_size-SAMPLE_SP_TAG_SIZE,
+            (uint8_t *)p_binary+p_binary->total_size-SAMPLE_SP_TAG_SIZE);
+        get_mac((uint8_t *)&arg, sizeof(VirtIOArg)-SAMPLE_SP_TAG_SIZE, arg.mac);
+#endif
         send_to_device(VIRTIO_IOC_PRIMARYCONTEXT, &arg);
         if(arg.cmd != cudaSuccess)
         {
@@ -570,9 +545,6 @@ extern "C" void** __cudaRegisterFatBinary(void *fatCubin)
     void **fatCubinHandle;
     uint32_t size;
     struct fatBinaryHeader *fatHeader;
-#ifdef ENABLE_MAC
-    uint8_t payload_tag[SAMPLE_SP_TAG_SIZE];
-#endif
  
     func();
     magic = *(unsigned int*)fatCubin;
@@ -582,7 +554,7 @@ extern "C" void** __cudaRegisterFatBinary(void *fatCubin)
         debug("FatBin\n");
         debug("magic    =   0x%x\n", binary->magic);
         debug("version  =   0x%x\n", binary->version);
-        debug("data =   0x%llx\n", *(uint64_t*)binary->data);
+        debug("data =   0x%lx\n", *(uint64_t*)binary->data);
         debug("filename_or_fatbins  =   %p\n", binary->filename_or_fatbins);
         fatCubinHandle = (void **)&binary->data;
         fatHeader = (struct fatBinaryHeader*)binary->data;
@@ -605,7 +577,6 @@ extern "C" void** __cudaRegisterFatBinary(void *fatCubin)
         memset(&arg, 0, ARG_LEN);
         size = (uint32_t)(fatHeader->headerSize + fatHeader->fatSize);
         arg.src     = (uint64_t)(binary->data);
-        arg.src2    = (uint64_t)(binary->data);
         arg.srcSize = size;
         arg.dstSize = 0;
         arg.cmd     = VIRTIO_CUDA_REGISTERFATBINARY;
@@ -615,12 +586,18 @@ extern "C" void** __cudaRegisterFatBinary(void *fatCubin)
             p_last_binary = NULL;
             return fatCubinHandle;
         }
-        // 
-        if(p_binary->total_size < sizeof(fatbin_buf_t) + p_binary->size + size + sizeof(cubin_buf_t)) {
+
+        if( p_binary->total_size < 
+                        sizeof(fatbin_buf_t) + p_binary->size + size + 
+                        sizeof(cubin_buf_t)+SAMPLE_SP_TAG_SIZE) {
             debug("realloc size %x to %lx\n", p_binary->total_size, 
-                sizeof(fatbin_buf_t) + p_binary->size + size + sizeof(cubin_buf_t) );
-            p_binary->total_size = roundup(sizeof(fatbin_buf_t) + p_binary->size + size + sizeof(cubin_buf_t), 
-                                    p_binary->block_size);
+                sizeof(fatbin_buf_t) + p_binary->size + 
+                size + sizeof(cubin_buf_t) + SAMPLE_SP_TAG_SIZE);
+            p_binary->total_size = roundup(sizeof(fatbin_buf_t) + 
+                                                p_binary->size + size + 
+                                                sizeof(cubin_buf_t) +
+                                                SAMPLE_SP_TAG_SIZE, 
+                                            p_binary->block_size);
             p_binary = (fatbin_buf_t *)realloc(p_binary, p_binary->total_size);
             debug("realloc total_size %x\n", p_binary->total_size);
         }
@@ -629,13 +606,7 @@ extern "C" void** __cudaRegisterFatBinary(void *fatCubin)
         p_last_binary->size     = size;
         p_last_binary->nr_var   = 0;
         p_last_binary->nr_func  = 0;
-#ifdef ENABLE_ENC
-        debug("binary_data first 4 bytes %x\n", *(int*)binary->data);
-        get_encrypted_data((uint8_t *)binary->data, size, p_last_binary->buf, payload_tag);
-        memcpy(p_last_binary->payload_tag, payload_tag, SAMPLE_SP_TAG_SIZE);
-#else
         memcpy(p_last_binary->buf, binary->data, size);
-#endif
         p_binary->size += size + sizeof(cubin_buf_t);
         p_binary->nr_binary++;
         debug("p_binary->size is %x\n", p_binary->size);
@@ -725,10 +696,17 @@ extern "C" void __cudaRegisterFunction(
     arg.tid     = (uint32_t)syscall(SYS_gettid);
     arg.flag    = (uint64_t)hostFun;
     // batch 
-    if(p_binary->total_size < sizeof(fatbin_buf_t) + p_binary->size + buf_size + sizeof(function_buf_t)) {
+    if(p_binary->total_size < sizeof(fatbin_buf_t) + 
+                                p_binary->size + buf_size + 
+                                sizeof(function_buf_t) + 
+                                SAMPLE_SP_TAG_SIZE) {
         debug("realloc size %x to %lx\n", p_binary->total_size, 
-                sizeof(fatbin_buf_t) + p_binary->size + buf_size + sizeof(function_buf_t) );
-        p_binary->total_size = roundup(sizeof(fatbin_buf_t) + p_binary->size + buf_size + sizeof(function_buf_t), 
+                sizeof(fatbin_buf_t) + p_binary->size + buf_size + 
+                sizeof(function_buf_t) + SAMPLE_SP_TAG_SIZE);
+        p_binary->total_size = roundup( sizeof(fatbin_buf_t) + 
+                                        p_binary->size + buf_size + 
+                                        sizeof(function_buf_t) + 
+                                        SAMPLE_SP_TAG_SIZE, 
                                     p_binary->block_size);
         offset = (unsigned long)p_last_binary - (unsigned long)p_binary;
         p_binary = (fatbin_buf_t *)realloc(p_binary, p_binary->total_size);
@@ -800,10 +778,13 @@ extern "C" void __cudaRegisterVar(
     arg.param   = (uint64_t)constant;
     arg.param2  = (uint64_t)global;
     // batch 
-    if(p_binary->total_size < sizeof(fatbin_buf_t) + p_binary->size + buf_size + sizeof(var_buf_t)) {
+    if(p_binary->total_size < sizeof(fatbin_buf_t) + p_binary->size + 
+                    buf_size + sizeof(var_buf_t) + SAMPLE_SP_TAG_SIZE) {
         debug("realloc size %lx to %lx\n", p_binary->total_size, 
-               sizeof(fatbin_buf_t) + p_binary->size + buf_size + sizeof(var_buf_t) );
-        p_binary->total_size = roundup(sizeof(fatbin_buf_t) + p_binary->size + buf_size + sizeof(var_buf_t), 
+               sizeof(fatbin_buf_t) + p_binary->size + buf_size + 
+               sizeof(var_buf_t)+SAMPLE_SP_TAG_SIZE );
+        p_binary->total_size = roundup(     sizeof(fatbin_buf_t) + p_binary->size + 
+                                    buf_size + sizeof(var_buf_t) + SAMPLE_SP_TAG_SIZE, 
                                     p_binary->block_size);
         offset = (unsigned long)p_last_binary - (unsigned long)p_binary;
         p_binary = (fatbin_buf_t *)realloc(p_binary, p_binary->total_size);
@@ -967,7 +948,8 @@ extern "C" cudaError_t cudaLaunchKernel(
     debug("kernel name %s\n", raw_func->name);
     debug("kernel param count %d\n", raw_func->param_count);
     debug("kernel param size %d\n", raw_func->param_size);
-    buf_size = sizeof(struct CUkernel_st)  + raw_func->param_size + raw_func->param_count*sizeof(uint32_t);
+    buf_size = sizeof(struct CUkernel_st)  + raw_func->param_size + 
+                raw_func->param_count*sizeof(uint32_t);
     kernel_param = (struct CUkernel_st*)malloc(buf_size);
     kernel_param->grid_x = kernelConf.gridDim.x;
     kernel_param->grid_y = kernelConf.gridDim.y;
@@ -996,13 +978,18 @@ extern "C" cudaError_t cudaLaunchKernel(
         param_offset_list[param_data->idx] = (uint32_t)param_data->offset;
         param_data = param_data->next;
     }
-
     memset(&arg, 0, sizeof(VirtIOArg));
     arg.cmd = VIRTIO_CUDA_LAUNCH_KERNEL;
     arg.src = (uint64_t)kernel_param;
     arg.srcSize = buf_size;
     arg.flag    = (uint64_t)hostFunc;
     arg.tid     = (uint32_t)syscall(SYS_gettid);
+#ifdef ENABLE_ENC
+    get_encrypted_data((uint8_t *)kernel_param, 
+                        (uint8_t *)kernel_param, buf_size,
+                        (uint8_t *)&arg, sizeof(VirtIOArg)-SAMPLE_SP_TAG_SIZE,
+                        (uint8_t *)arg.mac);
+#endif
     send_to_device(VIRTIO_IOC_LAUNCH_KERNEL, &arg);
     free(kernel_param);
     ctx->result = (CUresult)arg.cmd;
@@ -1110,6 +1097,7 @@ extern "C" cudaError_t cudaLaunch(const void *entry)
 extern "C" cudaError_t cudaMemcpy(void *dst, const void *src, size_t count, enum cudaMemcpyKind kind)
 {
     VirtIOArg arg;
+    int cmd = 0 ;
     func();
     api_inc(API_MEMCPY);
     init_primary_context();
@@ -1130,7 +1118,15 @@ extern "C" cudaError_t cudaMemcpy(void *dst, const void *src, size_t count, enum
     debug("gettid %d\n", arg.tid);
     if (kind == cudaMemcpyHostToDevice) {
         arg.cmd     = VIRTIO_CUDA_MEMCPY_HTOD;
+#ifdef ENABLE_ENC
+        uint8_t *data = (uint8_t *)my_malloc(count);
+        arg.src = (uint64_t)data;
+        get_encrypted_data(data, (uint8_t *)src, count,
+                        (uint8_t *)&arg, sizeof(VirtIOArg)-SAMPLE_SP_TAG_SIZE,
+                        (uint8_t *)arg.mac);
+#endif
         send_to_device(VIRTIO_IOC_MEMCPY_HTOD, &arg);
+        my_free(data);
     } else if(kind ==cudaMemcpyDeviceToHost) {
         arg.cmd     = VIRTIO_CUDA_MEMCPY_DTOH;
         send_to_device(VIRTIO_IOC_MEMCPY_DTOH, &arg);
@@ -1142,6 +1138,7 @@ extern "C" cudaError_t cudaMemcpy(void *dst, const void *src, size_t count, enum
         arg.cmd     = VIRTIO_CUDA_MEMCPY_DTOD;
         send_to_device(VIRTIO_IOC_MEMCPY_DTOD, &arg);
     }
+    
     ctx->result = (CUresult)arg.cmd;
     return (cudaError_t)arg.cmd;    
 }
@@ -1208,7 +1205,7 @@ extern "C" cudaError_t cudaMemset(void *dst, int value, size_t count)
     arg.cmd     = VIRTIO_CUDA_MEMSET;
     arg.dst     = (uint64_t)dst;
     arg.param   = (uint32_t)count;
-    arg.param2  = (uint64_t)value;
+    arg.paramSize  = (uint64_t)value;
     arg.tid     = (uint32_t)syscall(SYS_gettid);
     send_to_device(VIRTIO_IOC_MEMSET, &arg);
     ctx->result = (CUresult)arg.cmd;
@@ -3665,49 +3662,4 @@ static int fini_sgx_ecdh(SGX_RA_ENV sgx_ctx)
 
     sgx_destroy_enclave(sgx_ctx.enclave_id);
     return ret;
-}
-
-
-extern "C" cudaError_t cudaMemcpySafe(void *dst, const void *src, size_t count, enum cudaMemcpyKind kind)
-{
-    VirtIOArg arg;
-    uint8_t payload_tag[SAMPLE_SP_TAG_SIZE];
-    uint8_t *data;
-
-    func();
-    if (kind <0 || kind >4) {
-        return cudaErrorInvalidMemcpyDirection;
-    }
-    if(count<=0 || !dst || !src )
-        return cudaSuccess;
-    if (kind == cudaMemcpyHostToHost) {
-        memcpy(dst, src, count);
-        return cudaSuccess;
-    } 
-    memset(&arg, 0, sizeof(VirtIOArg));
-    arg.cmd     = VIRTIO_SGX_MEMCPY;
-    arg.flag    = kind;
-    arg.src     = (uint64_t)src;
-    arg.srcSize = (uint32_t)count;
-    arg.dst     = (uint64_t)dst;
-    arg.dstSize = (uint32_t)count;
-    arg.tid     = (uint32_t)syscall(SYS_gettid);
-    debug("gettid %d\n", arg.tid);
-    if (kind == cudaMemcpyHostToDevice) {
-        data = (uint8_t *)my_malloc(count);
-        get_encrypted_data((uint8_t *)src, count, data, payload_tag);
-        memcpy(arg.mac, payload_tag, SAMPLE_SP_TAG_SIZE);
-        arg.src = (uint64_t)data;
-    }
-    if (kind == cudaMemcpyDeviceToHost) {
-        data        = (uint8_t *)my_malloc(count);
-        arg.dst     = (uint64_t)data;
-    }
-    send_to_device(VIRTIO_IOC_SGX_MEMCPY, &arg);
-    if (kind == cudaMemcpyDeviceToHost) {
-        get_decrypted_data((uint8_t *)arg.dst, count, (uint8_t *)dst, arg.mac);
-    }
-    my_free(data);
-    data = NULL;
-    return (cudaError_t)arg.cmd;    
 }

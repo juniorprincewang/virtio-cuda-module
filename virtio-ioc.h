@@ -153,13 +153,6 @@ struct GPUDevice {
 #define CHUNK_SHIFT 21
 #define CHUNK_SIZE (1UL<<CHUNK_SHIFT)
 
-struct mem_page_st {
-	struct list_head list;
-	void *data;
-	long size;
-};
-
-
 #endif //KERNEL
 
 /*

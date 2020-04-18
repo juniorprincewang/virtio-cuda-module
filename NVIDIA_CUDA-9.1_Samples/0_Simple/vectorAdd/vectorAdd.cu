@@ -51,7 +51,7 @@ main(void)
 
     // Print the vector length to be used, and compute its size
     // int numElements = 50000;
-    int numElements = 1<<22;
+    int numElements = 1<<27;
     size_t size = numElements * sizeof(float);
     printf("[Vector addition of %d elements]\n", numElements);
     printf("[Vector size 0x%lx bytes]\n", size);
