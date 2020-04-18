@@ -150,7 +150,7 @@ struct GPUDevice {
 #include <linux/ioctl.h>
 #include <linux/list.h>
 
-#define CHUNK_SHIFT 20
+#define CHUNK_SHIFT 21
 #define CHUNK_SIZE (1UL<<CHUNK_SHIFT)
 
 struct mem_page_st {
