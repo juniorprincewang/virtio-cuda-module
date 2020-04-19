@@ -17,7 +17,7 @@ enum API_TYPE{
 	API_TYPE_SIZE
 };
 
-// #define ENABLE_SGX
+#define ENABLE_SGX
 #ifdef ENABLE_SGX
 	#define ENABLE_MAC
 	#define ENABLE_ENC

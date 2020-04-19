@@ -1429,6 +1429,13 @@ static int cuda_primarycontext(VirtIOArg __user *arg, struct port *port)
 	struct vgpu_device *vgpu;
 
 	func();
+	vgpu = find_gpu_by_device(port->portdev, port->device);
+	if (!vgpu) {
+		pr_err("Failed to find properties of device id %d.\n", port->device);
+		// cudaErrorInvalidDevice                =     10,
+		// put_user(10, &arg->cmd);
+		return -ENODEV;
+	}
 	payload = (VirtIOArg *)memdup_user(arg, ARG_SIZE);
 	if(!payload) {
 		pr_err("[ERROR] can not malloc 0x%lx memory\n", ARG_SIZE);
@@ -1438,6 +1445,7 @@ static int cuda_primarycontext(VirtIOArg __user *arg, struct port *port)
 	gva = memdup_user((const void __user *)payload->src, (size_t)src_size);
 	if(!gva) {
 		pr_err("[ERROR] can not malloc 0x%x memory\n", src_size);	
+		kfree(payload);
 		return -ENOMEM;
 	}
 	gldebug("memdup 0x%x size\n", src_size);
@@ -1450,15 +1458,8 @@ static int cuda_primarycontext(VirtIOArg __user *arg, struct port *port)
 	// ret = wait_for_inbuf(port, (char *)arg, ARG_SIZE);
 	gldebug("[+] Now analyse return buf\n");
 	gldebug("[+] arg->cmd = %d\n", payload->cmd);
-	vgpu = find_gpu_by_device(port->portdev, port->device);
-	if (!vgpu) {
-		pr_err("Failed to find properties of device id %d.\n", port->device);
-		// cudaErrorInvalidDevice                =     10,
-		put_user(10, &arg->cmd);
-	} else {
-		vgpu->initialized = 1;
-		put_user(payload->cmd, &arg->cmd);
-	}
+	vgpu->initialized = 1;
+	copy_to_user(arg, payload, ARG_SIZE);
 	kfree(gva);
 	kfree(payload);
 	return 0;
@@ -1517,6 +1518,7 @@ int cuda_register_var(VirtIOArg __user *arg, struct port *port)
 	return 0;
 }
 
+/*Fix me*/
 int cuda_launch(VirtIOArg __user *arg, struct port *port)
 {
 	VirtIOArg *payload;
@@ -1574,6 +1576,7 @@ static int cuda_launch_kernel(VirtIOArg __user *arg, struct port *port)
 	para = memdup_user((const void __user *)payload->src, (size_t)para_buf_size);
 	if(!para) {
 		pr_err("[ERROR] can not malloc 0x%x memory\n", para_buf_size);
+		kfree(payload);
 		return -ENOMEM;
 	}
 
@@ -1637,6 +1640,7 @@ static int cuda_memcpy_to_symbol(VirtIOArg __user *arg, struct port *port)
 	va = memdup_user((void*)payload->src, payload->srcSize);
 	if(!va) {
 		pr_err("[ERROR] can not malloc 0x%x memory\n", payload->srcSize);
+		kfree(payload);
 		return -ENOMEM;
 	}
 	gldebug("src=0x%llx, srcSize=0x%x, dst=0x%llx, dstSize=0x%x, "
@@ -1658,7 +1662,7 @@ static int cuda_memcpy_to_symbol(VirtIOArg __user *arg, struct port *port)
 
 	gldebug("[+] now analyse return buf\n");
 	gldebug("[+] arg->cmd = %d\n", payload->cmd);
-	put_user(payload->cmd, &arg->cmd);
+	copy_to_user(arg, payload, ARG_SIZE);
 	kfree(va);
 	kfree(payload);
 	return 0;
@@ -1678,18 +1682,14 @@ static int cuda_memcpy_from_symbol(VirtIOArg __user *arg, struct port *port)
 		pr_err("[ERROR] can not malloc 0x%lx memory\n", ARG_SIZE);
 		return -ENOMEM;
 	}
-	gldebug("src=0x%llx, srcSize=0x%x, dst=0x%llx, dstSize=0x%x, "
-			"kind=%llu, offset=%llx\n",
-			payload->src, payload->srcSize,
-			payload->dst, payload->dstSize, payload->flag, payload->param);
 	size = payload->dstSize;
 	// cudaMemcpyDeviceToHost
 	va = kmalloc(size, GFP_KERNEL);
 	if(!va) {
 		pr_err("[ERROR] can not malloc 0x%x memory\n", size);
+		kfree(payload);
 		return -ENOMEM;
 	}
-
 	sg_init_one(&arg_sg, payload, sizeof(*payload));
 	sgs[num_out++] = &arg_sg;
 	sg_init_one(&host_sg, va, size);
@@ -1705,12 +1705,11 @@ static int cuda_memcpy_from_symbol(VirtIOArg __user *arg, struct port *port)
 
 	gldebug("[+] now analyse return buf\n");
 	gldebug("[+] arg->cmd = %d\n", payload->cmd);
-	put_user(payload->cmd, &arg->cmd);
+	copy_to_user(arg, payload, ARG_SIZE);
 	// pay attention, do not use user pointer in kernel
 	if(copy_to_user((void __user *)payload->dst, va, size)) {
 		pr_err("[ERROR] Failed to copy to user \n");
 	}
-	gldebug("[+] now analyse return buf\n");
 	kfree(va);
 	kfree(payload);
 	return 0;
@@ -1743,28 +1742,30 @@ static int cuda_host_register(VirtIOArg __user *arg, struct port *port)
 	pages->uvm_end 	= payload->src + src_size;
 
 	st = kmalloc(sizeof(*st), GFP_KERNEL);
-	if(!st)
+	if(!st) {
+		kfree(payload);
 		return -ENOMEM;
+	}
 	pages->st = st;
 	page_list = uaddr_to_pages(payload->src, src_size, 0);
 	if(!page_list) {
 		// cudaErrorMemoryAllocation             =      2,
-		put_user(2, &arg->cmd);
-		return 0;
+		// put_user(2, &arg->cmd);
+		return -ENOMEM;
 	}
 	ret = sg_alloc_table_from_pages(st, page_list, nr_pages, 
 				offset_in_page(payload->src), src_size, GFP_KERNEL);
 	if(ret < 0) {
 		pr_err("Failed to allocated sg table, ret %d\n", ret);
-		put_user(2, &arg->cmd);
-		return 0;
+		// put_user(2, &arg->cmd);
+		return -ENOMEM;
 	}
 	kvfree(page_list);
 	gldebug("sg nents %d\n", st->nents);
 	if (st->nents > VIRTIO_INDIRECT_NUM_MAX) {
 		pr_err("Pages num exceed %d\n", VIRTIO_INDIRECT_NUM_MAX);
 		// cudaErrorMemoryAllocation             =      2,
-		put_user(2, &arg->cmd);
+		// put_user(2, &arg->cmd);
 		kfree(payload);
 		return -ENOMEM;
 	}
@@ -1772,7 +1773,6 @@ static int cuda_host_register(VirtIOArg __user *arg, struct port *port)
 	sg_init_one(&arg_sg, payload, sizeof(*payload));
 	sgs[num_out++] = &arg_sg;
 	sgs[num_out++] = st->sgl;
-
 #ifdef VIRTIO_LOCK
 	spin_lock(&port->io_lock);
 #endif
@@ -1783,7 +1783,7 @@ static int cuda_host_register(VirtIOArg __user *arg, struct port *port)
 
 	gldebug("[+] now analyse return buf\n");
 	gldebug("[+] arg->cmd = %d\n", payload->cmd);
-	put_user(payload->cmd, &arg->cmd);
+	copy_to_user(arg, payload, ARG_SIZE);
 	kfree(payload);
 	return 0;
 }
@@ -1807,8 +1807,9 @@ int cuda_host_unregister(VirtIOArg __user *arg, struct port *port)
 	if(!pages) {
 		gldebug("Failed to find such user addr 0x%llx\n", payload->src);
 		// cudaErrorHostMemoryNotRegistered      =     62,
-		put_user(62, &arg->cmd);
-		return 0;
+		// put_user(62, &arg->cmd);
+		kfree(payload);
+		return -ENOMEM;
 	}
 	st = pages->st;
 	/* meta data header*/
@@ -1827,7 +1828,7 @@ int cuda_host_unregister(VirtIOArg __user *arg, struct port *port)
 
 	gldebug("[+] now analyse return buf\n");
 	gldebug("[+] arg->cmd = %d\n", payload->cmd);
-	put_user(payload->cmd, &arg->cmd);
+	copy_to_user(arg, payload, ARG_SIZE);
 	sg_free_table(st);
 	kfree(st);
 	list_del(&pages->list);
@@ -1883,13 +1884,15 @@ static int cuda_memcpy_htod(VirtIOArg __user *arg, struct port *port)
 	if(!page_list) {
 		// cudaErrorMemoryAllocation             =      2,
 		put_user(2, &arg->cmd);
-		return 0;
+		kfree(payload);
+		return -ENOMEM;
 	}
 	nr_pages = page_nr(payload->src, src_size);
 	gldebug("nr page 0x%x\n", nr_pages);
 	st = kmalloc(sizeof(*st), GFP_KERNEL);
 	if(!st) {
 		kvfree(page_list);
+		kfree(payload);
 		return -ENOMEM;
 	}
 	ret = sg_alloc_table_from_pages(st, page_list, nr_pages, 
@@ -1899,7 +1902,8 @@ static int cuda_memcpy_htod(VirtIOArg __user *arg, struct port *port)
 		kvfree(page_list);
 		kfree(st);
 		put_user(2, &arg->cmd);
-		return 0;
+		kfree(payload);
+		return -ENOMEM;
 	}
 	kvfree(page_list);
 	gldebug("sg nents %d\n", st->nents);
@@ -1913,6 +1917,7 @@ static int cuda_memcpy_htod(VirtIOArg __user *arg, struct port *port)
 		overflow = 1;
 		if(!sg_zero_buffer(st->sgl, sg_nents(st->sgl), src_size, 0)) {
 			pr_err("Fail to zero buffer size\n");
+			kfree(payload);
 			return -ENOMEM;
 		}
 		sg = st->sgl;
@@ -1928,6 +1933,7 @@ static int cuda_memcpy_htod(VirtIOArg __user *arg, struct port *port)
 					pr_err("[ERROR] Failed to allocate memory.\n");
 					// cudaErrorInvalidValue                 =     11,
 					put_user(11, &arg->cmd);
+					kfree(payload);
 					return -ENOMEM;
 				}
 				addr = kmalloc(block_size, GFP_KERNEL);
@@ -1937,6 +1943,7 @@ static int cuda_memcpy_htod(VirtIOArg __user *arg, struct port *port)
 				pr_err("[ERROR] Failed to copy from user.\n");
 				// cudaErrorInvalidValue                 =     11,
 				put_user(11, &arg->cmd);
+				kfree(payload);
 				return -ENOMEM;
 			}
 			size_left -= block_size;
@@ -2008,13 +2015,15 @@ static int cuda_memcpy_dtoh(VirtIOArg __user *arg, struct port *port)
 	if(!page_list) {
 		// cudaErrorMemoryAllocation             =      2,
 		put_user(2, &arg->cmd);
-		return 0;
+		kfree(payload);
+		return -ENOMEM;
 	}
 	nr_pages = page_nr(payload->dst, src_size);
 	gldebug("nr page %x\n", nr_pages);
 	st = kmalloc(sizeof(*st), GFP_KERNEL);
 	if(!st) {
 		kvfree(page_list);
+		kfree(payload);
 		return -ENOMEM;
 	}
 	ret = sg_alloc_table_from_pages(st, page_list, nr_pages, 
@@ -2024,7 +2033,8 @@ static int cuda_memcpy_dtoh(VirtIOArg __user *arg, struct port *port)
 		put_user(2, &arg->cmd);
 		kvfree(page_list);
 		kfree(st);
-		return 0;
+		kfree(payload);
+		return -ENOMEM;
 	}
 	kvfree(page_list);
 	gldebug("sg nents %d\n", st->nents);
@@ -2033,6 +2043,7 @@ static int cuda_memcpy_dtoh(VirtIOArg __user *arg, struct port *port)
 		overflow = 1;
 		if(!sg_zero_buffer(st->sgl, sg_nents(st->sgl), src_size, 0)) {
 			pr_err("Fail to zero buffer size\n");
+			kfree(payload);
 			return -ENOMEM;
 		}
 		sg = st->sgl;
@@ -2048,6 +2059,7 @@ static int cuda_memcpy_dtoh(VirtIOArg __user *arg, struct port *port)
 					pr_err("[ERROR] Failed to allocate memory.\n");
 					// cudaErrorInvalidValue                 =     11,
 					put_user(11, &arg->cmd);
+					kfree(payload);
 					return -ENOMEM;
 				}
 				addr = kmalloc(block_size, GFP_KERNEL);
@@ -2126,74 +2138,30 @@ static int cuda_memcpy_dtod_async(VirtIOArg __user *arg, struct port *port)
 	return send_single_payload(arg, port);
 }
 
-static int cuda_memcpy(VirtIOArg __user *arg, struct port *port)
-{
-	return 0;
-}
-
-int cuda_memcpy_async(VirtIOArg __user *arg, struct port *port)
-{
-	return 0;
-}
-
 static int cuda_memset(VirtIOArg __user *arg, struct port *port)
 {
 	func();
 	return send_single_payload(arg, port);
 }
 
+static int cuda_memcpy(VirtIOArg __user *arg, struct port *port)
+{
+	return -EACCES;
+}
+
+int cuda_memcpy_async(VirtIOArg __user *arg, struct port *port)
+{
+	return -EACCES;
+}
+
 int cuda_get_last_error(VirtIOArg __user *arg, struct port *port)
 {
-	VirtIOArg *payload;
-	int ret;
-	func();
-
-	payload = (VirtIOArg *)memdup_user(arg, ARG_SIZE);
-	if(!payload) {
-		pr_err("[ERROR] can not malloc 0x%lx memory\n", ARG_SIZE);
-		return -ENOMEM;
-	}
-	#ifdef VIRTIO_LOCK
-	spin_lock(&port->io_lock);
-	#endif
-
-	ret = send_to_virtio(port, (void*)payload, ARG_SIZE);
-	#ifdef VIRTIO_LOCK
-	spin_unlock(&port->io_lock);
-	#endif
-
-	gldebug("[+] now analyse return buf\n");
-	gldebug("[+] arg->cmd = %d\n", payload->cmd);
-	put_user(payload->cmd, &arg->cmd);
-	kfree(payload);
-	return ret;
+	return -EACCES;
 }
 
 int cuda_peek_at_last_error(VirtIOArg __user *arg, struct port *port)
 {
-	VirtIOArg *payload;
-	int ret;
-	
-	func();
-	payload = (VirtIOArg *)memdup_user(arg, ARG_SIZE);
-	if(!payload) {
-		pr_err("[ERROR] can not malloc 0x%lx memory\n", ARG_SIZE);
-		return -ENOMEM;
-	}
-	#ifdef VIRTIO_LOCK
-	spin_lock(&port->io_lock);
-	#endif
-
-	ret = send_to_virtio(port, (void*)payload, ARG_SIZE);
-	#ifdef VIRTIO_LOCK
-	spin_unlock(&port->io_lock);
-	#endif
-
-	gldebug("[+] now analyse return buf\n");
-	gldebug("[+] arg->cmd = %d\n", payload->cmd);
-	put_user(payload->cmd, &arg->cmd);
-	kfree(payload);
-	return ret;
+	return -EACCES;
 }
 
 static int cuda_get_device_properties(VirtIOArg __user *arg, struct port *port)
@@ -2206,29 +2174,28 @@ static int cuda_get_device_properties(VirtIOArg __user *arg, struct port *port)
 
 	if(get_user(device, &arg->flag)){
 		pr_err("[ERROR] can not get device id\n");
-		goto error;
+		return -ENXIO;
 	}
 	if(get_user(buf_size, &arg->dstSize)){
 		pr_err("[ERROR] can not get buf size\n");
-		goto error;
+		return -ENXIO;
 	}
 	if(get_user(addr, &arg->dst)){
 		pr_err("[ERROR] can not get buf\n");
-		goto error;
+		return -ENXIO;
 	}
 	gldebug("device id is %d.\n", device);
 
 	vgpu = find_gpu_by_device(port->portdev, device);
-	if (vgpu) {
-		gldebug("prop_size is %u.\n", vgpu->prop_size);
-		copy_to_user((void __user *)addr, vgpu->prop_buf, buf_size);	
-		put_user(0, &arg->cmd);
-		return 0;
+	if (!vgpu) {
+		pr_err("Failed to find properties of device id %d.\n", device);
+		// cudaErrorInvalidDevice                =     10,
+		put_user(10, &arg->cmd);
+		return -ENXIO;
 	}
-error:
-	pr_err("Failed to find properties of device id %d.\n", device);
-	// cudaErrorInvalidDevice                =     10,
-	put_user(10, &arg->cmd);
+	gldebug("prop_size is %u.\n", vgpu->prop_size);
+	copy_to_user((void __user *)addr, vgpu->prop_buf, buf_size);	
+	put_user(0, &arg->cmd);
 	return 0;
 }
 
@@ -2339,7 +2306,7 @@ static int cuda_device_reset(VirtIOArg __user *arg, struct port *port)
 	}
 	if(!vgpu->initialized) {
 		put_user(0, &arg->cmd);
-		return 0;
+		return -EACCES;
 	}
 	vgpu->initialized = 0;
 	vgpu->flags = 0;
@@ -2360,7 +2327,7 @@ static int cuda_device_synchronize(VirtIOArg __user *arg, struct port *port)
 	}
 	if(!vgpu->initialized) {
 		put_user(0, &arg->cmd);
-		return 0;
+		return -EACCES;
 	}
 	return send_single_payload(arg, port);
 }
@@ -3395,259 +3362,259 @@ static long port_fops_ioctl(struct file *filp, unsigned int cmd, unsigned long a
 			ret = cuda_gpa_to_hva((VirtIOArg __user*)argp, port);
 			break;
 		case VIRTIO_IOC_PRIMARYCONTEXT:
-			cuda_primarycontext((VirtIOArg __user*)arg, port);
+			ret = cuda_primarycontext((VirtIOArg __user*)arg, port);
 			break;
 		case VIRTIO_IOC_REGISTERFATBINARY:
-			cuda_register_fatbinary((VirtIOArg __user*)arg, port);
+			ret = cuda_register_fatbinary((VirtIOArg __user*)arg, port);
 			break;
 		case VIRTIO_IOC_UNREGISTERFATBINARY:
-			cuda_unregister_fatbinary((VirtIOArg __user*)arg, port);
+			ret = cuda_unregister_fatbinary((VirtIOArg __user*)arg, port);
 			break;
 		case VIRTIO_IOC_REGISTERFUNCTION:
-			cuda_register_function((VirtIOArg __user*)arg, port);
+			ret = cuda_register_function((VirtIOArg __user*)arg, port);
 			break;
 		case VIRTIO_IOC_LAUNCH:
-			cuda_launch((VirtIOArg __user*)arg, port);
+			ret = cuda_launch((VirtIOArg __user*)arg, port);
 			break;
 		case VIRTIO_IOC_LAUNCH_KERNEL:
-			cuda_launch_kernel((VirtIOArg __user*)arg, port);
+			ret = cuda_launch_kernel((VirtIOArg __user*)arg, port);
 			break;
 		case VIRTIO_IOC_MALLOC:
-			cuda_malloc((VirtIOArg __user*)arg, port);
+			ret = cuda_malloc((VirtIOArg __user*)arg, port);
 			break;
 		case VIRTIO_IOC_MEMCPY:
-			cuda_memcpy((VirtIOArg __user*)arg, port);
+			ret = cuda_memcpy((VirtIOArg __user*)arg, port);
 			break;
 		case VIRTIO_IOC_MEMCPY_HTOD:
-			cuda_memcpy_htod((VirtIOArg __user*)arg, port);
+			ret = cuda_memcpy_htod((VirtIOArg __user*)arg, port);
 			break;
 		case VIRTIO_IOC_MEMCPY_DTOH:
-			cuda_memcpy_dtoh((VirtIOArg __user*)arg, port);
+			ret = cuda_memcpy_dtoh((VirtIOArg __user*)arg, port);
 			break;
 		case VIRTIO_IOC_MEMCPY_DTOD:
-			cuda_memcpy_dtod((VirtIOArg __user*)arg, port);
+			ret = cuda_memcpy_dtod((VirtIOArg __user*)arg, port);
 			break;
 		case VIRTIO_IOC_MEMCPY_HTOD_ASYNC:
-			cuda_memcpy_htod_async((VirtIOArg __user*)arg, port);
+			ret = cuda_memcpy_htod_async((VirtIOArg __user*)arg, port);
 			break;
 		case VIRTIO_IOC_MEMCPY_DTOH_ASYNC:
-			cuda_memcpy_dtoh_async((VirtIOArg __user*)arg, port);
+			ret = cuda_memcpy_dtoh_async((VirtIOArg __user*)arg, port);
 			break;
 		case VIRTIO_IOC_MEMCPY_DTOD_ASYNC:
-			cuda_memcpy_dtod_async((VirtIOArg __user*)arg, port);
+			ret = cuda_memcpy_dtod_async((VirtIOArg __user*)arg, port);
 			break;
 		case VIRTIO_IOC_SGX_MEMCPY:
-			cuda_memcpy_safe((VirtIOArg __user*)arg, port);
+			ret = cuda_memcpy_safe((VirtIOArg __user*)arg, port);
 			break;
 		case VIRTIO_IOC_FREE:
-			cuda_free((VirtIOArg __user*)arg, port);
+			ret = cuda_free((VirtIOArg __user*)arg, port);
 			break;
 		case VIRTIO_IOC_GETDEVICE:
-			cuda_get_device((VirtIOArg __user*)arg, port);
+			ret = cuda_get_device((VirtIOArg __user*)arg, port);
 			break;
 		case VIRTIO_IOC_GETDEVICEPROPERTIES:
-			cuda_get_device_properties((VirtIOArg __user*)arg, port);
+			ret = cuda_get_device_properties((VirtIOArg __user*)arg, port);
 			break;
 		case VIRTIO_IOC_SETDEVICE:
-			cuda_set_device((VirtIOArg __user*)arg, port);
+			ret = cuda_set_device((VirtIOArg __user*)arg, port);
 			break;
 		case VIRTIO_IOC_DEVICESETCACHECONFIG:
-			cuda_device_set_cache_config((VirtIOArg __user*)arg, port);
+			ret = cuda_device_set_cache_config((VirtIOArg __user*)arg, port);
 			break;
 		case VIRTIO_IOC_GETDEVICECOUNT:
-			cuda_get_device_count((VirtIOArg __user*)arg, port);
+			ret = cuda_get_device_count((VirtIOArg __user*)arg, port);
 			break;
 		case VIRTIO_IOC_DEVICERESET:
-			cuda_device_reset((VirtIOArg __user*)arg, port);
+			ret = cuda_device_reset((VirtIOArg __user*)arg, port);
 			break;
 		case VIRTIO_IOC_STREAMCREATE:
-			cuda_stream_create((VirtIOArg __user*)arg, port);
+			ret = cuda_stream_create((VirtIOArg __user*)arg, port);
 			break;
 		case VIRTIO_IOC_STREAMCREATEWITHFLAGS:
-			cuda_stream_create_with_flags((VirtIOArg __user*)arg, port);
+			ret = cuda_stream_create_with_flags((VirtIOArg __user*)arg, port);
 			break;
 		case VIRTIO_IOC_STREAMDESTROY:
-			cuda_stream_destroy((VirtIOArg __user*)arg, port);
+			ret = cuda_stream_destroy((VirtIOArg __user*)arg, port);
 			break;
 		case VIRTIO_IOC_EVENTCREATE:
-			cuda_event_create((VirtIOArg __user*)arg, port);
+			ret = cuda_event_create((VirtIOArg __user*)arg, port);
 			break;
 		case VIRTIO_IOC_EVENTDESTROY:
-			cuda_event_destroy((VirtIOArg __user*)arg, port);
+			ret = cuda_event_destroy((VirtIOArg __user*)arg, port);
 			break;
 		case VIRTIO_IOC_EVENTQUERY:
-			cuda_event_query((VirtIOArg __user*)arg, port);
+			ret = cuda_event_query((VirtIOArg __user*)arg, port);
 			break;
 		case VIRTIO_IOC_THREADSYNCHRONIZE:
-			cuda_thread_synchronize((VirtIOArg __user*)arg, port);
+			ret = cuda_thread_synchronize((VirtIOArg __user*)arg, port);
 			break;
 		case VIRTIO_IOC_EVENTSYNCHRONIZE:
-			cuda_event_synchronize((VirtIOArg __user*)arg, port);
+			ret = cuda_event_synchronize((VirtIOArg __user*)arg, port);
 			break;
 		case VIRTIO_IOC_EVENTELAPSEDTIME:
-			cuda_event_elapsed_time((VirtIOArg __user*)arg, port);
+			ret = cuda_event_elapsed_time((VirtIOArg __user*)arg, port);
 			break;
 		case VIRTIO_IOC_EVENTRECORD:
-			cuda_event_record((VirtIOArg __user*)arg, port);
+			ret = cuda_event_record((VirtIOArg __user*)arg, port);
 			break;
 		case VIRTIO_IOC_GETLASTERROR:
-			cuda_get_last_error((VirtIOArg __user*)arg, port);
+			ret = cuda_get_last_error((VirtIOArg __user*)arg, port);
 			break;
 		case VIRTIO_IOC_PEEKATLASTERROR:
-			cuda_peek_at_last_error((VirtIOArg __user*)arg, port);
+			ret = cuda_peek_at_last_error((VirtIOArg __user*)arg, port);
 			break;
 		case VIRTIO_IOC_MEMCPY_ASYNC:
-			cuda_memcpy_async((VirtIOArg __user*)arg, port);
+			ret = cuda_memcpy_async((VirtIOArg __user*)arg, port);
 			break;
 		case VIRTIO_IOC_MEMSET:
-			cuda_memset((VirtIOArg __user*)arg, port);
+			ret = cuda_memset((VirtIOArg __user*)arg, port);
 			break;
 		case VIRTIO_IOC_DEVICESYNCHRONIZE:
-			cuda_device_synchronize((VirtIOArg __user*)arg, port);
+			ret = cuda_device_synchronize((VirtIOArg __user*)arg, port);
 			break;
 		case VIRTIO_IOC_EVENTCREATEWITHFLAGS:
-			cuda_event_create_with_flags((VirtIOArg __user*)arg, port);
+			ret = cuda_event_create_with_flags((VirtIOArg __user*)arg, port);
 			break;
 		case VIRTIO_IOC_MEMGETINFO:
-			cuda_mem_get_info((VirtIOArg __user*)arg, port);
+			ret = cuda_mem_get_info((VirtIOArg __user*)arg, port);
 			break;
 		case VIRTIO_IOC_SETDEVICEFLAGS:
-			cuda_set_device_flags((VirtIOArg __user*)arg, port);
+			ret = cuda_set_device_flags((VirtIOArg __user*)arg, port);
 			break;
 		case VIRTIO_IOC_GETDEVICEFLAGS:
-			cuda_get_device_flags((VirtIOArg __user*)arg, port);
+			ret = cuda_get_device_flags((VirtIOArg __user*)arg, port);
 			break;
 		case VIRTIO_IOC_HOSTREGISTER:
-			cuda_host_register((VirtIOArg __user*)arg, port);
+			ret = cuda_host_register((VirtIOArg __user*)arg, port);
 			break;
 		case VIRTIO_IOC_HOSTUNREGISTER:
-			cuda_host_unregister((VirtIOArg __user*)arg, port);
+			ret = cuda_host_unregister((VirtIOArg __user*)arg, port);
 			break;
 		case VIRTIO_IOC_MALLOCHOST:
-			cuda_malloc_host((VirtIOArg __user*)arg, port);
+			ret = cuda_malloc_host((VirtIOArg __user*)arg, port);
 			break;
 		case VIRTIO_IOC_FREEHOST:
-			cuda_free_host((VirtIOArg __user*)arg, port);
+			ret = cuda_free_host((VirtIOArg __user*)arg, port);
 			break;
 		case VIRTIO_IOC_MEMCPYTOSYMBOL:
-			cuda_memcpy_to_symbol((VirtIOArg __user*)arg, port);
+			ret = cuda_memcpy_to_symbol((VirtIOArg __user*)arg, port);
 			break;
 		case VIRTIO_IOC_MEMCPYFROMSYMBOL:
-			cuda_memcpy_from_symbol((VirtIOArg __user*)arg, port);
+			ret = cuda_memcpy_from_symbol((VirtIOArg __user*)arg, port);
 			break;
 		case VIRTIO_IOC_REGISTERVAR:
-			cuda_register_var((VirtIOArg __user*)arg, port);
+			ret = cuda_register_var((VirtIOArg __user*)arg, port);
 			break;
 		case VIRTIO_IOC_STREAMWAITEVENT:
-			cuda_stream_wait_event((VirtIOArg __user*)arg, port);
+			ret = cuda_stream_wait_event((VirtIOArg __user*)arg, port);
 			break;
 		case VIRTIO_IOC_STREAMSYNCHRONIZE:
-			cuda_stream_synchronize((VirtIOArg __user*)arg, port);
+			ret = cuda_stream_synchronize((VirtIOArg __user*)arg, port);
 			break;
 		case VIRTIO_IOC_CUBLAS_CREATE:
-			cublas_create((VirtIOArg __user*)arg, port);
+			ret = cublas_create((VirtIOArg __user*)arg, port);
 			break;
 		case VIRTIO_IOC_CUBLAS_DESTROY:
-			cublas_destroy((VirtIOArg __user*)arg, port);
+			ret = cublas_destroy((VirtIOArg __user*)arg, port);
 			break;
 		case VIRTIO_IOC_CUBLAS_SETVECTOR:
-			cublas_set_vector((VirtIOArg __user*)arg, port);
+			ret = cublas_set_vector((VirtIOArg __user*)arg, port);
 			break;
 		case VIRTIO_IOC_CUBLAS_GETVECTOR:
-			cublas_get_vector((VirtIOArg __user*)arg, port);
+			ret = cublas_get_vector((VirtIOArg __user*)arg, port);
 			break;
 		case VIRTIO_IOC_CUBLAS_SETMATRIX:
-			cublas_set_matrix((VirtIOArg __user*)arg, port);
+			ret = cublas_set_matrix((VirtIOArg __user*)arg, port);
 			break;
 		case VIRTIO_IOC_CUBLAS_GETMATRIX:
-			cublas_get_matrix((VirtIOArg __user*)arg, port);
+			ret = cublas_get_matrix((VirtIOArg __user*)arg, port);
 			break;
 		case VIRTIO_IOC_CUBLAS_SETSTREAM:
-			cublas_set_stream((VirtIOArg __user*)arg, port);
+			ret = cublas_set_stream((VirtIOArg __user*)arg, port);
 			break;
 		case VIRTIO_IOC_CUBLAS_GETSTREAM:
-			cublas_get_stream((VirtIOArg __user*)arg, port);
+			ret = cublas_get_stream((VirtIOArg __user*)arg, port);
 			break;
 		case VIRTIO_IOC_CUBLAS_SASUM:
-			cublas_sasum((VirtIOArg __user*)arg, port);
+			ret = cublas_sasum((VirtIOArg __user*)arg, port);
 			break;
 		case VIRTIO_IOC_CUBLAS_DASUM:
-			cublas_dasum((VirtIOArg __user*)arg, port);
+			ret = cublas_dasum((VirtIOArg __user*)arg, port);
 			break;
 		case VIRTIO_IOC_CUBLAS_SAXPY:
-			cublas_saxpy((VirtIOArg __user*)arg, port);
+			ret = cublas_saxpy((VirtIOArg __user*)arg, port);
 			break;
 		case VIRTIO_IOC_CUBLAS_DAXPY:
-			cublas_daxpy((VirtIOArg __user*)arg, port);
+			ret = cublas_daxpy((VirtIOArg __user*)arg, port);
 			break;
 		case VIRTIO_IOC_CUBLAS_SCOPY:
-			cublas_scopy((VirtIOArg __user*)arg, port);
+			ret = cublas_scopy((VirtIOArg __user*)arg, port);
 			break;
 		case VIRTIO_IOC_CUBLAS_DCOPY:
-			cublas_dcopy((VirtIOArg __user*)arg, port);
+			ret = cublas_dcopy((VirtIOArg __user*)arg, port);
 			break;
 		case VIRTIO_IOC_CUBLAS_SDOT:
-			cublas_sdot((VirtIOArg __user*)arg, port);
+			ret = cublas_sdot((VirtIOArg __user*)arg, port);
 			break;
 		case VIRTIO_IOC_CUBLAS_DDOT:
-			cublas_ddot((VirtIOArg __user*)arg, port);
+			ret = cublas_ddot((VirtIOArg __user*)arg, port);
 			break;
 		case VIRTIO_IOC_CUBLAS_SSCAL:
-			cublas_sscal((VirtIOArg __user*)arg, port);
+			ret = cublas_sscal((VirtIOArg __user*)arg, port);
 			break;
 		case VIRTIO_IOC_CUBLAS_DSCAL:
-			cublas_dscal((VirtIOArg __user*)arg, port);
+			ret = cublas_dscal((VirtIOArg __user*)arg, port);
 			break;
 		case VIRTIO_IOC_CUBLAS_SGEMV:
-			cublas_sgemv((VirtIOArg __user*)arg, port);
+			ret = cublas_sgemv((VirtIOArg __user*)arg, port);
 			break;
 		case VIRTIO_IOC_CUBLAS_DGEMV:
-			cublas_dgemv((VirtIOArg __user*)arg, port);
+			ret = cublas_dgemv((VirtIOArg __user*)arg, port);
 			break;
 		case VIRTIO_IOC_CUBLAS_SGEMM:
-			cublas_sgemm((VirtIOArg __user*)arg, port);
+			ret = cublas_sgemm((VirtIOArg __user*)arg, port);
 			break;
 		case VIRTIO_IOC_CUBLAS_DGEMM:
-			cublas_dgemm((VirtIOArg __user*)arg, port);
+			ret = cublas_dgemm((VirtIOArg __user*)arg, port);
 			break;
 		case VIRTIO_IOC_CURAND_CREATEGENERATOR:
-			curand_create_generator((VirtIOArg __user*)arg, port);
+			ret = curand_create_generator((VirtIOArg __user*)arg, port);
 			break;
 		case VIRTIO_IOC_CURAND_CREATEGENERATORHOST:
-			curand_create_generator_host((VirtIOArg __user*)arg, port);
+			ret = curand_create_generator_host((VirtIOArg __user*)arg, port);
 			break;
 		case VIRTIO_IOC_CURAND_GENERATE:
-			curand_generate((VirtIOArg __user*)arg, port);
+			ret = curand_generate((VirtIOArg __user*)arg, port);
 			break;
 		case VIRTIO_IOC_CURAND_GENERATENORMAL:
-			curand_generate_normal((VirtIOArg __user*)arg, port);
+			ret = curand_generate_normal((VirtIOArg __user*)arg, port);
 			break;
 		case VIRTIO_IOC_CURAND_GENERATENORMALDOUBLE:
-			curand_generate_normal_double((VirtIOArg __user*)arg, port);
+			ret = curand_generate_normal_double((VirtIOArg __user*)arg, port);
 			break;
 		case VIRTIO_IOC_CURAND_GENERATEUNIFORM:
-			curand_generate_uniform((VirtIOArg __user*)arg, port);
+			ret = curand_generate_uniform((VirtIOArg __user*)arg, port);
 			break;
 		case VIRTIO_IOC_CURAND_GENERATEUNIFORMDOUBLE:
-			curand_generate_uniform_double((VirtIOArg __user*)arg, port);
+			ret = curand_generate_uniform_double((VirtIOArg __user*)arg, port);
 			break;
 		case VIRTIO_IOC_CURAND_DESTROYGENERATOR:
-			curand_destroy_generator((VirtIOArg __user*)arg, port);
+			ret = curand_destroy_generator((VirtIOArg __user*)arg, port);
 			break;
 		case VIRTIO_IOC_CURAND_SETGENERATOROFFSET:
-			curand_set_generator_offset((VirtIOArg __user*)arg, port);
+			ret = curand_set_generator_offset((VirtIOArg __user*)arg, port);
 			break;
 		case VIRTIO_IOC_CURAND_SETPSEUDORANDOMSEED:
-			curand_set_pseudorandom_seed((VirtIOArg __user*)arg, port);
+			ret = curand_set_pseudorandom_seed((VirtIOArg __user*)arg, port);
 			break;
 		case VIRTIO_IOC_SGX_MSG0:
-			sgx_proc_msg0((VirtIOArg __user*)arg, port);
+			ret = sgx_proc_msg0((VirtIOArg __user*)arg, port);
 			break;
 		case VIRTIO_IOC_SGX_MSG1:
-			sgx_proc_msg1((VirtIOArg __user*)arg, port);
+			ret = sgx_proc_msg1((VirtIOArg __user*)arg, port);
 			break;
 		case VIRTIO_IOC_SGX_MSG3:
-			sgx_proc_msg3((VirtIOArg __user*)arg, port);
+			ret = sgx_proc_msg3((VirtIOArg __user*)arg, port);
 			break;
 		default:
 			pr_err("[#] illegel VIRTIO ioctl nr = %u!\n", \
@@ -3719,7 +3686,7 @@ static int port_fops_mmap(struct file *filp, struct vm_area_struct *vma)
 	while(size_left) {
 		block_size = (size_left > CHUNK_SIZE)? CHUNK_SIZE: size_left;
 		order = get_order(block_size);
-		gldebug("block size 0x%lx order is %d\n", block_size, order);
+		// gldebug("block size 0x%lx order is %d\n", block_size, order);
 		page = alloc_pages(GFP_KERNEL, order);
 		while(!page) {
 			block_size /=2;

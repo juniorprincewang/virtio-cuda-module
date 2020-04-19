@@ -168,11 +168,14 @@ static SGX_RA_ENV sgx_env;
 */
 void send_to_device(int cmd, void *arg)
 {
+    int err = 0;
     #ifdef VIRTIO_LOCK_USER
     pthread_spin_lock(&lock);
     #endif
-    if(ioctl(ctx->fd, cmd, arg) == -1){
-        error("ioctl when cmd is %d\n", _IOC_NR(cmd));
+    if((err = ioctl(ctx->fd, cmd, arg)) < 0){
+        error("ioctl cmd %d return errno %d (%s)\n", 
+                _IOC_NR(cmd), errno, strerror(errno));
+        exit(-1);
     }
     #ifdef VIRTIO_LOCK_USER
     pthread_spin_unlock(&lock);
@@ -219,48 +222,162 @@ static void my_free(void *ptr)
 /**************************************************/
 /**************************************************/
 // start of crypto helper
+
+typedef struct _sgx_errlist_t {
+    sgx_status_t err;
+    const char *msg;
+    const char *sug; /* Suggestion */
+} sgx_errlist_t;
+/* Error code returned by sgx_create_enclave */
+static sgx_errlist_t sgx_errlist[] = {
+    {
+        SGX_ERROR_UNEXPECTED,
+        "Unexpected error occurred.",
+        NULL
+    },
+    {
+        SGX_ERROR_INVALID_PARAMETER,
+        "Invalid parameter.",
+        NULL
+    },
+    {
+        SGX_ERROR_OUT_OF_MEMORY,
+        "Out of memory.",
+        NULL
+    },
+    {
+        SGX_ERROR_ENCLAVE_LOST,
+        "Power transition occurred.",
+        "Please refer to the sample \"PowerTransition\" for details."
+    },
+    {
+        SGX_ERROR_INVALID_ENCLAVE,
+        "Invalid enclave image.",
+        NULL
+    },
+    {
+        SGX_ERROR_INVALID_ENCLAVE_ID,
+        "Invalid enclave identification.",
+        NULL
+    },
+    {
+        SGX_ERROR_INVALID_SIGNATURE,
+        "Invalid enclave signature.",
+        NULL
+    },
+    {
+        SGX_ERROR_OUT_OF_EPC,
+        "Out of EPC memory.",
+        NULL
+    },
+    {
+        SGX_ERROR_NO_DEVICE,
+        "Invalid SGX device.",
+        "Please make sure SGX module is enabled in the BIOS, and install SGX driver afterwards."
+    },
+    {
+        SGX_ERROR_MEMORY_MAP_CONFLICT,
+        "Memory map conflicted.",
+        NULL
+    },
+    {
+        SGX_ERROR_INVALID_METADATA,
+        "Invalid enclave metadata.",
+        NULL
+    },
+    {
+        SGX_ERROR_DEVICE_BUSY,
+        "SGX device was busy.",
+        NULL
+    },
+    {
+        SGX_ERROR_INVALID_VERSION,
+        "Enclave version was invalid.",
+        NULL
+    },
+    {
+        SGX_ERROR_INVALID_ATTRIBUTE,
+        "Enclave was not authorized.",
+        NULL
+    },
+    {
+        SGX_ERROR_ENCLAVE_FILE_ACCESS,
+        "Can't open enclave file.",
+        NULL
+    },
+    {
+        SGX_ERROR_MAC_MISMATCH,
+        "Verification error.",
+        NULL
+    }
+};
+
+/* Check error conditions for loading enclave */
+static void print_error_message(sgx_status_t ret)
+{
+    size_t idx = 0;
+    size_t ttl = sizeof sgx_errlist/sizeof sgx_errlist[0];
+
+    for (idx = 0; idx < ttl; idx++) {
+        if(ret == sgx_errlist[idx].err) {
+            if(NULL != sgx_errlist[idx].sug)
+                printf("Info: %s\n", sgx_errlist[idx].sug);
+            printf("Error: %s\n", sgx_errlist[idx].msg);
+            break;
+        }
+    }
+    
+    if (idx == ttl)
+        printf("Error code is 0x%X. Please refer to the \"Intel SGX SDK Developer Reference\" for more details.\n", ret);
+}
+
 static void get_mac(uint8_t *data, uint32_t size, uint8_t *payload_tag)
 {
-    sgx_status_t status;
-    int ret;
+    sgx_status_t ret, status;
     ret = mac_data(sgx_env.enclave_id, &status, sgx_env.context, 
                             data, size, payload_tag);
-    if((SGX_SUCCESS != ret)  || (SGX_SUCCESS != status))
+    if(SGX_SUCCESS != ret || status != SGX_SUCCESS)
     {
         error("\nError, get mac using SK based AESGCM failed. ret = "
-                        "0x%0x. status = 0x%0x", ret, status);
+                        "0x%0x.  status 0x%0x\n", ret, status);
+        print_error_message(ret);
+        print_error_message(status);
         return;
     }
     DPRINT_TAGS(payload_tag);
 }
 
-static void get_decrypted_data(uint8_t *src, uint32_t size, uint8_t *dst, uint8_t *payload_tag)
-{
-    sgx_status_t status;
-    int ret;
-    DPRINT_TAGS(payload_tag);
-    ret = decrypt_data(sgx_env.enclave_id, &status, sgx_env.context, 
-                            src, size, dst, payload_tag);
-    if((SGX_SUCCESS != ret)  || (SGX_SUCCESS != status))
-    {
-        error("\nError, decrypt data using SK based AESGCM failed. ret = "
-                        "0x%0x. status = 0x%0x\n", ret, status);
-        return;
-    }
-}
-
-static void get_encrypted_data( uint8_t *dst, uint8_t *src, uint32_t size, 
+static void get_decrypted_data( uint8_t *src, uint32_t size, uint8_t *dst,
                                 uint8_t *aad, uint32_t aad_len,
                                 uint8_t *payload_tag)
 {
-    sgx_status_t status;
-    int ret;
+    sgx_status_t ret, status;
+    DPRINT_TAGS(payload_tag);
+    ret = aead_request_decrypt(sgx_env.enclave_id, &status, sgx_env.context, 
+                            src, size, dst, aad, aad_len, payload_tag);
+    if(SGX_SUCCESS != ret || status != SGX_SUCCESS)
+    {
+        error("\nError, decrypt data using SK based AESGCM failed. ret = "
+                        "0x%0x, status 0x%0x.\n", ret, status);
+        print_error_message(ret);
+        print_error_message(status);
+        return;
+    }
+}
+
+static void get_encrypted_data( uint8_t *src, uint32_t size, uint8_t *dst,
+                                uint8_t *aad, uint32_t aad_len,
+                                uint8_t *payload_tag)
+{
+    sgx_status_t ret, status;
     ret = aead_request_encrypt(sgx_env.enclave_id, &status, sgx_env.context, 
                             src, size, dst, aad, aad_len, payload_tag);
-    if((SGX_SUCCESS != ret)  || (SGX_SUCCESS != status))
+    if(SGX_SUCCESS != ret || status != SGX_SUCCESS)
     {
         error("Error, encrypt data using SK based AESGCM failed. ret = "
-                        "0x%0x. status = 0x%0x\n", ret, status);
+                        "0x%0x, status 0x%0x.\n", ret, status);
+        print_error_message(ret);
+        print_error_message(status);
         return;
     }
     DPRINT_TAGS(payload_tag);
@@ -985,8 +1102,7 @@ extern "C" cudaError_t cudaLaunchKernel(
     arg.flag    = (uint64_t)hostFunc;
     arg.tid     = (uint32_t)syscall(SYS_gettid);
 #ifdef ENABLE_ENC
-    get_encrypted_data((uint8_t *)kernel_param, 
-                        (uint8_t *)kernel_param, buf_size,
+    get_encrypted_data( (uint8_t *)kernel_param, buf_size, (uint8_t *)kernel_param,
                         (uint8_t *)&arg, sizeof(VirtIOArg)-SAMPLE_SP_TAG_SIZE,
                         (uint8_t *)arg.mac);
 #endif
@@ -1116,26 +1232,57 @@ extern "C" cudaError_t cudaMemcpy(void *dst, const void *src, size_t count, enum
     arg.src     = (uint64_t)src;
     arg.dst     = (uint64_t)dst;
     debug("gettid %d\n", arg.tid);
+    debug("data size 0x%lx\n", count);
     if (kind == cudaMemcpyHostToDevice) {
         arg.cmd     = VIRTIO_CUDA_MEMCPY_HTOD;
 #ifdef ENABLE_ENC
         uint8_t *data = (uint8_t *)my_malloc(count);
         arg.src = (uint64_t)data;
-        get_encrypted_data(data, (uint8_t *)src, count,
+        get_encrypted_data((uint8_t *)src, count, data,
                         (uint8_t *)&arg, sizeof(VirtIOArg)-SAMPLE_SP_TAG_SIZE,
                         (uint8_t *)arg.mac);
 #endif
         send_to_device(VIRTIO_IOC_MEMCPY_HTOD, &arg);
+#ifdef ENABLE_ENC
         my_free(data);
+#endif
     } else if(kind ==cudaMemcpyDeviceToHost) {
         arg.cmd     = VIRTIO_CUDA_MEMCPY_DTOH;
+#ifdef ENABLE_ENC
+        uint8_t *data = (uint8_t *)my_malloc(count);
+        arg.dst = (uint64_t)data;
+        get_encrypted_data(NULL, 0, NULL,
+                        (uint8_t *)&arg, sizeof(VirtIOArg)-SAMPLE_SP_TAG_SIZE,
+                        (uint8_t *)arg.mac);
+#endif
         send_to_device(VIRTIO_IOC_MEMCPY_DTOH, &arg);
+#ifdef ENABLE_ENC
+        // debug("data %x %x %x %x... %x %x\n", data[0], data[1], data[2], data[3], data[count-2], data[count-1]);
+        // debug("encrypt\n");
+        // get_encrypted_data(data, count, data,
+        //                 (uint8_t *)&arg, sizeof(VirtIOArg)-SAMPLE_SP_TAG_SIZE,
+        //                 (uint8_t *)arg.mac);
+        // debug("After encryptin, then decrypt\n");
+        // debug("data %x %x %x %x... %x %x\n", data[0], data[1], data[2], data[3], data[count-2], data[count-1]);
+        get_decrypted_data(data, count, (uint8_t*)dst,
+                        (uint8_t *)&arg, sizeof(VirtIOArg)-SAMPLE_SP_TAG_SIZE,
+                        (uint8_t *)arg.mac);
+        // debug("After decrypt\n");
+        // debug("data %x %x %x %x... %x %x\n", data[0], data[1], data[2], data[3], data[count-2], data[count-1]);
+        // memcpy(dst, data, count);
+        my_free(data);
+#endif
     } else if(kind == cudaMemcpyHostToHost) {
         memcpy(dst, src, count);
         ctx->result = (CUresult)0;
         return cudaSuccess;
     } else if (kind == cudaMemcpyDeviceToDevice) {
         arg.cmd     = VIRTIO_CUDA_MEMCPY_DTOD;
+#ifdef ENABLE_ENC
+        get_encrypted_data(NULL, 0, NULL,
+                        (uint8_t *)&arg, sizeof(VirtIOArg)-SAMPLE_SP_TAG_SIZE,
+                        (uint8_t *)arg.mac);
+#endif
         send_to_device(VIRTIO_IOC_MEMCPY_DTOD, &arg);
     }
     
@@ -3390,6 +3537,7 @@ int init_sgx_ecdh(SGX_RA_ENV *sgx_ctx)
             {
                 ret = -1;
                 error("\nError, call enclave_init_ra fail.\n");
+                print_error_message(status);
                 goto CLEANUP;
             }
             debug("\nCall enclave_init_ra success.");
@@ -3538,9 +3686,10 @@ int init_sgx_ecdh(SGX_RA_ENV *sgx_ctx)
             if((SGX_SUCCESS != ret) ||
                (SGX_SUCCESS != status))
             {
-                ret = -1;
                 error("\nError: INTEGRITY FAILED - attestation result "
                                 "message MK based cmac failed.\n");
+                print_error_message(status);
+                ret = -1;
                 goto CLEANUP;
             }
 
@@ -3597,6 +3746,7 @@ int init_sgx_ecdh(SGX_RA_ENV *sgx_ctx)
                                 "using SK based AESGCM failed in [%s]. ret = "
                                 "0x%0x. status = 0x%0x\n", __FUNCTION__, ret,
                                  status);
+                print_error_message(status);
                 goto CLEANUP;
             }
             debug("Secret successfully received from server.\n");
@@ -3616,8 +3766,9 @@ int init_sgx_ecdh(SGX_RA_ENV *sgx_ctx)
             ret = enclave_ra_close(enclave_id, &status, context);
             if(SGX_SUCCESS != ret || status)
             {
-                ret = -1;
                 error("\nError, call enclave_ra_close fail.\n");
+                print_error_message(status);
+                ret = -1;
             }
             else
             {
@@ -3648,8 +3799,9 @@ static int fini_sgx_ecdh(SGX_RA_ENV sgx_ctx)
         ret = enclave_ra_close(sgx_ctx.enclave_id, &status, sgx_ctx.context);
         if(SGX_SUCCESS != ret || status)
         {
-            ret = -1;
             error("Error, call enclave_ra_close fail.\n");
+            print_error_message(status);
+            ret = -1;
         }
         else
         {
