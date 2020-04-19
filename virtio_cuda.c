@@ -1859,7 +1859,7 @@ static int cuda_memcpy_htod(VirtIOArg __user *arg, struct port *port)
 {
 	VirtIOArg *payload;
 	uint32_t src_size;
-	struct scatterlist *sgs[2], arg_sg, *sg;
+	struct scatterlist *sgs[3], arg_sg, mac_sg, *sg;
 	int num_out = 0, num_in = 0;
 	struct sg_table *st;
 	struct page ** page_list;
@@ -1868,6 +1868,7 @@ static int cuda_memcpy_htod(VirtIOArg __user *arg, struct port *port)
 	void *addr;
 	unsigned long size_left, block_size, offset;
 	int overflow = 0;
+	void *macs=NULL;
 
 	func();
 	payload = (VirtIOArg *)memdup_user(arg, ARG_SIZE);
@@ -1875,10 +1876,15 @@ static int cuda_memcpy_htod(VirtIOArg __user *arg, struct port *port)
 		pr_err("[ERROR] can not malloc 0x%lx memory\n", ARG_SIZE);
 		return -ENOMEM;
 	}
+	macs = memdup_user((void *)payload->param, payload->paramSize);
+	if(!macs) {
+		pr_err("[ERROR] can not malloc 0x%x memory\n", payload->paramSize);
+		return -ENOMEM;
+	}
 	gldebug("tid = %d, src=0x%llx, srcSize=0x%x, "
-			"dst=0x%llx, dstSize=0x%x, kind=%llu\n",
+			"dst=0x%llx, param=0x%llx, paramSize=%x\n",
 			payload->tid, payload->src, payload->srcSize,
-			payload->dst, payload->dstSize, payload->flag);
+			payload->dst, payload->param, payload->paramSize);
 	src_size = payload->srcSize;
 	page_list = uaddr_to_pages(payload->src, src_size, 0);
 	if(!page_list) {
@@ -1958,8 +1964,11 @@ static int cuda_memcpy_htod(VirtIOArg __user *arg, struct port *port)
 		}
 		gldebug("new sg nents %d\n", st->nents);
 	}
+
 	sg_init_one(&arg_sg, payload, sizeof(*payload));
 	sgs[num_out++] = &arg_sg;
+	sg_init_one(&mac_sg, macs, payload->paramSize);
+	sgs[num_out++] = &mac_sg;
 	sgs[num_out++] = st->sgl;
 #ifdef VIRTIO_LOCK
 	spin_lock(&port->io_lock);
@@ -1981,6 +1990,8 @@ static int cuda_memcpy_htod(VirtIOArg __user *arg, struct port *port)
 		}
 	}
 	sg_free_table(st);
+	if(macs)
+		kfree(macs);
 	kfree(st);
 	kfree(payload);
 	return 0;
@@ -1990,7 +2001,7 @@ static int cuda_memcpy_dtoh(VirtIOArg __user *arg, struct port *port)
 {
 	VirtIOArg *payload;
 	uint32_t src_size;
-	struct scatterlist *sgs[2], arg_sg, *sg;
+	struct scatterlist *sgs[3], arg_sg, mac_sg, *sg;
 	int num_out = 0, num_in = 0;
 	struct sg_table *st;
 	struct page ** page_list;
@@ -1999,11 +2010,17 @@ static int cuda_memcpy_dtoh(VirtIOArg __user *arg, struct port *port)
 	void *addr;
 	unsigned long size_left, block_size, offset;
 	int overflow = 0;
+	void *macs=NULL;
 
 	func();
 	payload = (VirtIOArg *)memdup_user(arg, ARG_SIZE);
 	if(!payload) {
 		pr_err("[ERROR] can not malloc 0x%lx memory\n", ARG_SIZE);
+		return -ENOMEM;
+	}
+	macs = memdup_user((void *)payload->param, payload->paramSize);
+	if(!macs) {
+		pr_err("[ERROR] can not malloc 0x%x memory\n", payload->paramSize);
 		return -ENOMEM;
 	}
 	gldebug("tid = %d, src=0x%llx, srcSize=0x%x, "
@@ -2077,6 +2094,8 @@ static int cuda_memcpy_dtoh(VirtIOArg __user *arg, struct port *port)
 	}
 	sg_init_one(&arg_sg, payload, sizeof(*payload));
 	sgs[num_out++] = &arg_sg;
+	sg_init_one(&mac_sg, macs, payload->paramSize);
+	sgs[num_out+num_in++] = &mac_sg;
 	sgs[num_out+num_in++] = st->sgl;
 #ifdef VIRTIO_LOCK
 	spin_lock(&port->io_lock);
@@ -2089,6 +2108,7 @@ static int cuda_memcpy_dtoh(VirtIOArg __user *arg, struct port *port)
 	gldebug("[+] now analyse return buf\n");
 	gldebug("[+] arg->cmd = %d\n", payload->cmd);
 	copy_to_user(arg, payload, ARG_SIZE);
+	copy_to_user((void*)payload->param, macs, payload->paramSize);
 	if(overflow) {
 		offset = 0;
 		for_each_sg(st->sgl, sg, st->nents, i) {
@@ -2109,6 +2129,8 @@ static int cuda_memcpy_dtoh(VirtIOArg __user *arg, struct port *port)
 	}
 	sg_free_table(st);
 	kfree(st);
+	if(macs)
+		kfree(macs);
 	kfree(payload);
 	return 0;
 }
@@ -2306,7 +2328,7 @@ static int cuda_device_reset(VirtIOArg __user *arg, struct port *port)
 	}
 	if(!vgpu->initialized) {
 		put_user(0, &arg->cmd);
-		return -EACCES;
+		return 0;
 	}
 	vgpu->initialized = 0;
 	vgpu->flags = 0;
@@ -2327,7 +2349,7 @@ static int cuda_device_synchronize(VirtIOArg __user *arg, struct port *port)
 	}
 	if(!vgpu->initialized) {
 		put_user(0, &arg->cmd);
-		return -EACCES;
+		return 0;
 	}
 	return send_single_payload(arg, port);
 }

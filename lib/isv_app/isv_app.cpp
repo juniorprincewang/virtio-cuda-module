@@ -1213,7 +1213,6 @@ extern "C" cudaError_t cudaLaunch(const void *entry)
 extern "C" cudaError_t cudaMemcpy(void *dst, const void *src, size_t count, enum cudaMemcpyKind kind)
 {
     VirtIOArg arg;
-    int cmd = 0 ;
     func();
     api_inc(API_MEMCPY);
     init_primary_context();
@@ -1236,19 +1235,43 @@ extern "C" cudaError_t cudaMemcpy(void *dst, const void *src, size_t count, enum
     if (kind == cudaMemcpyHostToDevice) {
         arg.cmd     = VIRTIO_CUDA_MEMCPY_HTOD;
 #ifdef ENABLE_ENC
+        unsigned long block_nr = roundup(count, CHUNK_SIZE)>> CHUNK_SHIFT;
+        debug("block_nr 0x%lx\n", block_nr);
         uint8_t *data = (uint8_t *)my_malloc(count);
+        uint8_t *macs = (uint8_t *)malloc(SAMPLE_SP_TAG_SIZE * block_nr);
+        arg.paramSize = SAMPLE_SP_TAG_SIZE * block_nr;
+        arg.param = (uint64_t)macs;
         arg.src = (uint64_t)data;
-        get_encrypted_data((uint8_t *)src, count, data,
+        size_t offset=0;
+        size_t size_left = count, block_size=0;
+        int i = 0;
+        while(size_left) {
+            block_size = (size_left > CHUNK_SIZE)? CHUNK_SIZE: size_left;
+            get_encrypted_data((uint8_t *)src+offset, block_size, 
+                            data+offset,
+                            NULL, 0,
+                            macs+i*SAMPLE_SP_TAG_SIZE);
+            offset += block_size;
+            size_left -= block_size;
+            i++;
+        }
+        get_encrypted_data(NULL, 0, NULL,
                         (uint8_t *)&arg, sizeof(VirtIOArg)-SAMPLE_SP_TAG_SIZE,
                         (uint8_t *)arg.mac);
 #endif
         send_to_device(VIRTIO_IOC_MEMCPY_HTOD, &arg);
 #ifdef ENABLE_ENC
         my_free(data);
+        free(macs);
 #endif
     } else if(kind ==cudaMemcpyDeviceToHost) {
         arg.cmd     = VIRTIO_CUDA_MEMCPY_DTOH;
 #ifdef ENABLE_ENC
+        int block_nr = roundup(count, CHUNK_SIZE)>> CHUNK_SHIFT;
+        debug("block_nr 0x%x\n", block_nr);
+        uint8_t *macs = (uint8_t *)malloc(SAMPLE_SP_TAG_SIZE * block_nr);
+        arg.paramSize = SAMPLE_SP_TAG_SIZE * block_nr;
+        arg.param = (uint64_t)macs;
         uint8_t *data = (uint8_t *)my_malloc(count);
         arg.dst = (uint64_t)data;
         get_encrypted_data(NULL, 0, NULL,
@@ -1257,19 +1280,20 @@ extern "C" cudaError_t cudaMemcpy(void *dst, const void *src, size_t count, enum
 #endif
         send_to_device(VIRTIO_IOC_MEMCPY_DTOH, &arg);
 #ifdef ENABLE_ENC
-        // debug("data %x %x %x %x... %x %x\n", data[0], data[1], data[2], data[3], data[count-2], data[count-1]);
-        // debug("encrypt\n");
-        // get_encrypted_data(data, count, data,
-        //                 (uint8_t *)&arg, sizeof(VirtIOArg)-SAMPLE_SP_TAG_SIZE,
-        //                 (uint8_t *)arg.mac);
-        // debug("After encryptin, then decrypt\n");
-        // debug("data %x %x %x %x... %x %x\n", data[0], data[1], data[2], data[3], data[count-2], data[count-1]);
-        get_decrypted_data(data, count, (uint8_t*)dst,
-                        (uint8_t *)&arg, sizeof(VirtIOArg)-SAMPLE_SP_TAG_SIZE,
-                        (uint8_t *)arg.mac);
-        // debug("After decrypt\n");
-        // debug("data %x %x %x %x... %x %x\n", data[0], data[1], data[2], data[3], data[count-2], data[count-1]);
-        // memcpy(dst, data, count);
+        size_t offset=0;
+        size_t size_left = count, block_size=0;
+        int i = 0;
+        while(size_left) {
+            block_size = (size_left > CHUNK_SIZE)? CHUNK_SIZE: size_left;
+            get_decrypted_data(data+offset, block_size, 
+                        (uint8_t*)dst+offset,
+                        NULL, 0,
+                        macs+i*SAMPLE_SP_TAG_SIZE);
+            offset += block_size;
+            size_left -= block_size;
+            i++;
+        }
+        free(macs);
         my_free(data);
 #endif
     } else if(kind == cudaMemcpyHostToHost) {
@@ -1286,6 +1310,114 @@ extern "C" cudaError_t cudaMemcpy(void *dst, const void *src, size_t count, enum
         send_to_device(VIRTIO_IOC_MEMCPY_DTOD, &arg);
     }
     
+    ctx->result = (CUresult)arg.cmd;
+    return (cudaError_t)arg.cmd;    
+}
+
+extern "C" cudaError_t cudaMemcpyAsync(
+            void *dst, 
+            const void *src, 
+            size_t count, 
+            enum cudaMemcpyKind kind,
+            cudaStream_t stream
+            )
+{
+    VirtIOArg arg;
+    func();
+    api_inc(API_MEMCPY);
+    if (kind <0 || kind >4) {
+        debug("direction is %d\n", kind);
+        return cudaErrorInvalidMemcpyDirection;
+    }
+    if(!dst || !src || count<=0)
+        return cudaSuccess;
+    mem_inc(kind, count);
+    init_primary_context();
+    memset(&arg, 0, sizeof(VirtIOArg));
+    arg.flag    = kind;
+    arg.src     = (uint64_t)src;
+    arg.srcSize = (uint32_t)count;
+    arg.dst     = (uint64_t)dst;
+    arg.dstSize = (uint32_t)count;
+    arg.stream  = (uint64_t)stream;
+    arg.tid     = (uint32_t)syscall(SYS_gettid);
+     if (kind == cudaMemcpyHostToDevice) {
+        arg.cmd     = VIRTIO_CUDA_MEMCPY_HTOD_ASYNC;
+#ifdef ENABLE_ENC
+        int block_nr = roundup(count, CHUNK_SIZE)>> CHUNK_SHIFT;
+        debug("block_nr 0x%x\n", block_nr);
+        uint8_t *data = (uint8_t *)my_malloc(count);
+        uint8_t *macs = (uint8_t *)malloc(SAMPLE_SP_TAG_SIZE * block_nr);
+        arg.paramSize = SAMPLE_SP_TAG_SIZE * block_nr;
+        arg.param = (uint64_t)macs;
+        arg.src = (uint64_t)data;
+        size_t offset=0;
+        size_t size_left = count, block_size=0;
+        int i = 0;
+        while(size_left) {
+            block_size = (size_left > CHUNK_SIZE)? CHUNK_SIZE: size_left;
+            get_encrypted_data((uint8_t *)src+offset, block_size, 
+                            data+offset,
+                            NULL, 0,
+                            macs+i*SAMPLE_SP_TAG_SIZE);
+            offset += block_size;
+            size_left -= block_size;
+            i++;
+        }
+        get_encrypted_data(NULL, 0, NULL,
+                        (uint8_t *)&arg, sizeof(VirtIOArg)-SAMPLE_SP_TAG_SIZE,
+                        (uint8_t *)arg.mac);
+#endif
+        send_to_device(VIRTIO_IOC_MEMCPY_HTOD_ASYNC, &arg);
+#ifdef ENABLE_ENC
+        my_free(data);
+        free(macs);
+#endif
+    } else if(kind ==cudaMemcpyDeviceToHost) {
+        arg.cmd     = VIRTIO_CUDA_MEMCPY_DTOH_ASYNC;
+#ifdef ENABLE_ENC
+        int block_nr = roundup(count, CHUNK_SIZE)>> CHUNK_SHIFT;
+        debug("block_nr 0x%x\n", block_nr);
+        uint8_t *macs = (uint8_t *)malloc(SAMPLE_SP_TAG_SIZE * block_nr);
+        arg.paramSize = SAMPLE_SP_TAG_SIZE * block_nr;
+        arg.param = (uint64_t)macs;
+        uint8_t *data = (uint8_t *)my_malloc(count);
+        arg.dst = (uint64_t)data;
+        get_encrypted_data(NULL, 0, NULL,
+                        (uint8_t *)&arg, sizeof(VirtIOArg)-SAMPLE_SP_TAG_SIZE,
+                        (uint8_t *)arg.mac);
+#endif
+        send_to_device(VIRTIO_IOC_MEMCPY_DTOH_ASYNC, &arg);
+#ifdef ENABLE_ENC
+        size_t offset=0;
+        size_t size_left = count, block_size=0;
+        int i = 0;
+        while(size_left) {
+            block_size = (size_left > CHUNK_SIZE)? CHUNK_SIZE: size_left;
+            get_decrypted_data(data+offset, block_size, 
+                        (uint8_t*)dst+offset,
+                        NULL, 0,
+                        macs+i*SAMPLE_SP_TAG_SIZE);
+            offset += block_size;
+            size_left -= block_size;
+            i++;
+        }
+        free(macs);
+        my_free(data);
+#endif
+    } else if(kind == cudaMemcpyHostToHost) {
+        memcpy(dst, src, count);
+        ctx->result = (CUresult)0;
+        return cudaSuccess;
+    } else if (kind == cudaMemcpyDeviceToDevice) {
+        arg.cmd     = VIRTIO_CUDA_MEMCPY_DTOD_ASYNC;
+#ifdef ENABLE_ENC
+        get_encrypted_data(NULL, 0, NULL,
+                        (uint8_t *)&arg, sizeof(VirtIOArg)-SAMPLE_SP_TAG_SIZE,
+                        (uint8_t *)arg.mac);
+#endif
+        send_to_device(VIRTIO_IOC_MEMCPY_DTOD_ASYNC, &arg);
+    }
     ctx->result = (CUresult)arg.cmd;
     return (cudaError_t)arg.cmd;    
 }
@@ -1355,52 +1487,6 @@ extern "C" cudaError_t cudaMemset(void *dst, int value, size_t count)
     arg.paramSize  = (uint64_t)value;
     arg.tid     = (uint32_t)syscall(SYS_gettid);
     send_to_device(VIRTIO_IOC_MEMSET, &arg);
-    ctx->result = (CUresult)arg.cmd;
-    return (cudaError_t)arg.cmd;    
-}
-
-extern "C" cudaError_t cudaMemcpyAsync(
-            void *dst, 
-            const void *src, 
-            size_t count, 
-            enum cudaMemcpyKind kind,
-            cudaStream_t stream
-            )
-{
-    VirtIOArg arg;
-    func();
-    api_inc(API_MEMCPY);
-    if (kind <0 || kind >4) {
-        debug("direction is %d\n", kind);
-        return cudaErrorInvalidMemcpyDirection;
-    }
-    if(!dst || !src || count<=0)
-        return cudaSuccess;
-    mem_inc(kind, count);
-    init_primary_context();
-    memset(&arg, 0, sizeof(VirtIOArg));
-    // arg.cmd     = VIRTIO_CUDA_MEMCPY_ASYNC;
-    arg.flag    = kind;
-    arg.src     = (uint64_t)src;
-    arg.srcSize = (uint32_t)count;
-    arg.dst     = (uint64_t)dst;
-    arg.dstSize = (uint32_t)count;
-    arg.stream  = (uint64_t)stream;
-    arg.tid     = (uint32_t)syscall(SYS_gettid);
-     if (kind == cudaMemcpyHostToDevice) {
-        arg.cmd     = VIRTIO_CUDA_MEMCPY_HTOD_ASYNC;
-        send_to_device(VIRTIO_IOC_MEMCPY_HTOD_ASYNC, &arg);
-    } else if(kind ==cudaMemcpyDeviceToHost) {
-        arg.cmd     = VIRTIO_CUDA_MEMCPY_DTOH_ASYNC;
-        send_to_device(VIRTIO_IOC_MEMCPY_DTOH_ASYNC, &arg);
-    } else if(kind == cudaMemcpyHostToHost) {
-        memcpy(dst, src, count);
-        ctx->result = (CUresult)0;
-        return cudaSuccess;
-    } else if (kind == cudaMemcpyDeviceToDevice) {
-        arg.cmd     = VIRTIO_CUDA_MEMCPY_DTOD_ASYNC;
-        send_to_device(VIRTIO_IOC_MEMCPY_DTOD_ASYNC, &arg);
-    }
     ctx->result = (CUresult)arg.cmd;
     return (cudaError_t)arg.cmd;    
 }

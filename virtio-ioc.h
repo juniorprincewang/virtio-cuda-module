@@ -3,6 +3,8 @@
 
 // #define VIRTIO_CUDA_DEBUG
 #define TIMING 
+#define CHUNK_SHIFT 22
+#define CHUNK_SIZE (1UL<<CHUNK_SHIFT)
 
 enum API_TYPE{
     API_OTHER,     // 0
@@ -150,8 +152,6 @@ struct GPUDevice {
 #include <linux/ioctl.h>
 #include <linux/list.h>
 
-#define CHUNK_SHIFT 21
-#define CHUNK_SIZE (1UL<<CHUNK_SHIFT)
 
 #endif //KERNEL
 
