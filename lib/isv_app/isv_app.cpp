@@ -586,11 +586,7 @@ static void ctx_del()
 
 void my_library_init(void) {
     #ifdef  TIMING
-        struct timeval total_start, total_end;
         struct timeval ecdh_start, ecdh_end;
-    #endif
-    #ifdef  TIMING
-        gettimeofday(&total_start, NULL);
     #endif
     size_t page_size = sysconf(_SC_PAGESIZE);
     debug("Init dynamic library.\n");
@@ -601,20 +597,18 @@ void my_library_init(void) {
         exit(-1);
     pthread_spin_init(&lock, 0);
 
+#ifdef ENABLE_SGX
 #ifdef  TIMING
     gettimeofday(&ecdh_start, NULL);
 #endif
-#ifdef ENABLE_SGX
     init_sgx_ecdh(&sgx_env);
-#endif
 #ifdef  TIMING
     gettimeofday(&ecdh_end, NULL);
-#endif
-#ifdef  TIMING
     double ecdh_time   = (double)(ecdh_end.tv_usec - ecdh_start.tv_usec)/1000000 +
                     (double)(ecdh_end.tv_sec - ecdh_start.tv_sec);
     printf("ecdh time: \t\t%f\n", ecdh_time);
 #endif
+#endif // endof ENABLE_SGX
 
     p_binary = (fatbin_buf_t *)__libc_malloc(page_size<<5);
     if (!p_binary) {
@@ -626,14 +620,6 @@ void my_library_init(void) {
     p_binary->nr_binary = 0;
     p_binary->total_size = page_size<<5;
     p_binary->block_size = page_size<<3;
-#ifdef  TIMING
-    gettimeofday(&total_end, NULL);
-#endif
-#ifdef  TIMING
-    double total_time   = (double)(total_end.tv_usec - total_start.tv_usec)/1000000 +
-                    (double)(total_end.tv_sec - total_start.tv_sec);
-    printf("init library time: \t\t%f\n", total_time);
-#endif
 }
 
 void my_library_fini(void)
@@ -685,6 +671,8 @@ extern "C" void** __cudaRegisterFatBinary(void *fatCubin)
         // meta header occupies first 0x50 bytes.
 
         CUmod_st *mod = mod_add((char*)binary->data+0x50);
+        if(!mod)
+            exit(-1);
     #ifdef VIRTIO_CUDA_DEBUG
         dump_cuda_symbol(mod);
         dump_cuda_kernel(mod);

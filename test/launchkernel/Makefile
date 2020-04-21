@@ -1,5 +1,5 @@
 TARGET	= run
-NVCC	= nvcc -arch sm_35 --cudart=shared
+NVCC	= nvcc -arch sm_70 --cudart=shared
 LIBS	= -lcudart
 CFLAGS	= 
 

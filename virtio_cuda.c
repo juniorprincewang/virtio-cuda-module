@@ -56,6 +56,12 @@
 
 #define is_rproc_enabled IS_ENABLED(CONFIG_REMOTEPROC)
 
+struct mem_page_st {
+	struct list_head list;
+	void *data;
+	long size;
+};
+
 typedef struct MemObjectList {
 	uint64_t addr;
 	size_t size;
@@ -1859,16 +1865,20 @@ static int cuda_memcpy_htod(VirtIOArg __user *arg, struct port *port)
 {
 	VirtIOArg *payload;
 	uint32_t src_size;
-	struct scatterlist *sgs[3], arg_sg, mac_sg, *sg;
+	struct scatterlist **sgs, arg_sg, mac_sg, *sg;
 	int num_out = 0, num_in = 0;
 	struct sg_table *st;
 	struct page ** page_list;
 	int nr_pages=0;
 	int ret = 0, i=0;
 	void *addr;
+	int order = 0;
 	unsigned long size_left, block_size, offset;
 	int overflow = 0;
 	void *macs=NULL;
+	struct list_head head;
+	struct mem_page_st *tmp=NULL, *mem=NULL;
+	int block_num = 0;
 
 	func();
 	payload = (VirtIOArg *)memdup_user(arg, ARG_SIZE);
@@ -1876,10 +1886,12 @@ static int cuda_memcpy_htod(VirtIOArg __user *arg, struct port *port)
 		pr_err("[ERROR] can not malloc 0x%lx memory\n", ARG_SIZE);
 		return -ENOMEM;
 	}
-	macs = memdup_user((void *)payload->param, payload->paramSize);
-	if(!macs) {
-		pr_err("[ERROR] can not malloc 0x%x memory\n", payload->paramSize);
-		return -ENOMEM;
+	if(payload->paramSize) {
+		macs = memdup_user((void *)payload->param, payload->paramSize);
+		if(!macs) {
+			pr_err("[ERROR] can not malloc 0x%x memory\n", payload->paramSize);
+			return -ENOMEM;
+		}
 	}
 	gldebug("tid = %d, src=0x%llx, srcSize=0x%x, "
 			"dst=0x%llx, param=0x%llx, paramSize=%x\n",
@@ -1921,18 +1933,22 @@ static int cuda_memcpy_htod(VirtIOArg __user *arg, struct port *port)
 		// kfree(payload);
 		// return -ENOMEM;
 		overflow = 1;
-		if(!sg_zero_buffer(st->sgl, sg_nents(st->sgl), src_size, 0)) {
+/*		if(!sg_zero_buffer(st->sgl, sg_nents(st->sgl), src_size, 0)) {
 			pr_err("Fail to zero buffer size\n");
 			kfree(payload);
 			return -ENOMEM;
 		}
 		sg = st->sgl;
-		st->nents = 0;
+		st->nents = 0;*/
 		size_left = src_size;
 		offset = 0;
+		block_num = 0;
+		INIT_LIST_HEAD(&head);
 		while(size_left) {
 			block_size = (size_left > CHUNK_SIZE)? CHUNK_SIZE: size_left;
+			order = get_order(block_size);
 			addr = kmalloc(block_size, GFP_KERNEL);
+			// addr = (void *)__get_free_pages(GFP_KERNEL, order);
 			while(!addr) {
 				block_size /=2;
 				if(unlikely(block_size < PAGE_SIZE)) {
@@ -1944,32 +1960,55 @@ static int cuda_memcpy_htod(VirtIOArg __user *arg, struct port *port)
 				}
 				addr = kmalloc(block_size, GFP_KERNEL);
 			}
+			gldebug("addr %lx\n", (unsigned long)addr);
 			// gldebug("block size 0x%lx\n", block_size);
-			if (copy_from_user((void*)addr, (void*)payload->src+offset, block_size)) {
+			if (copy_from_user((void*)addr, (void __user *)(payload->src+offset), block_size)) {
 				pr_err("[ERROR] Failed to copy from user.\n");
 				// cudaErrorInvalidValue                 =     11,
 				put_user(11, &arg->cmd);
 				kfree(payload);
 				return -ENOMEM;
 			}
+			tmp = kmalloc(sizeof(struct mem_page_st), GFP_KERNEL);
+			tmp->size = block_size;
+			tmp->data = addr;
+			list_add_tail(&tmp->list, &head);
 			size_left -= block_size;
 			offset += block_size;
-			sg_set_page(sg, virt_to_page(addr), block_size, 0);
-			st->nents++;
-			if(!size_left) {
-				sg_mark_end(sg);
-				break;
-			}
-			sg = sg_next(sg);
+			block_num++;
+			// sg_set_buf(sg, virt_to_page(addr), block_size);
+			// st->nents++;
+			// if(!size_left) {
+			// 	sg_mark_end(sg);
+			// 	break;
+			// }
+			// sg = sg_next(sg);
 		}
-		gldebug("new sg nents %d\n", st->nents);
+		sgs = kmalloc(sizeof(struct scatterlist *) * (2 + block_num), GFP_KERNEL);
+		sg = kmalloc(sizeof(struct scatterlist) * block_num, GFP_KERNEL);
+		sg_init_one(&arg_sg, payload, sizeof(*payload));
+		sgs[num_out++] = &arg_sg;
+		if(macs) {
+			sg_init_one(&mac_sg, macs, payload->paramSize);
+			sgs[num_out++] = &mac_sg;
+		}
+		i=0;
+		list_for_each_entry(tmp, &head, list) {
+			sg_init_one(&sg[i], tmp->data, tmp->size);
+			sgs[num_out++] = &sg[i];
+			i++;
+		}
+	} else {
+		sgs = kmalloc(sizeof(struct scatterlist *) * 3, GFP_KERNEL);
+		sg_init_one(&arg_sg, payload, sizeof(*payload));
+		sgs[num_out++] = &arg_sg;
+		if(macs) {
+			sg_init_one(&mac_sg, macs, payload->paramSize);
+			sgs[num_out++] = &mac_sg;
+		}
+		sgs[num_out++] = st->sgl;
 	}
 
-	sg_init_one(&arg_sg, payload, sizeof(*payload));
-	sgs[num_out++] = &arg_sg;
-	sg_init_one(&mac_sg, macs, payload->paramSize);
-	sgs[num_out++] = &mac_sg;
-	sgs[num_out++] = st->sgl;
 #ifdef VIRTIO_LOCK
 	spin_lock(&port->io_lock);
 #endif
@@ -1982,13 +2021,19 @@ static int cuda_memcpy_htod(VirtIOArg __user *arg, struct port *port)
 	gldebug("[+] arg->cmd = %d\n", payload->cmd);
 	copy_to_user(arg, payload, ARG_SIZE);
 	if(overflow) {
-		for_each_sg(st->sgl, sg, st->nents, i) {
-			if(sg_page(sg)) {
-				// gldebug("Free %x, addr 0x%lx\n", i, page_to_virt(sg_page(sg)));
-				kfree(page_to_virt(sg_page(sg)));
-			}
+		// for_each_sg(st->sgl, sg, st->nents, i) {
+		// 	if(sg_page(sg)) {
+		// 		// gldebug("Free %x, addr 0x%lx\n", i, page_to_virt(sg_page(sg)));
+		// 		kfree(page_to_virt(sg_page(sg)));
+		// 	}
+		// }
+		kfree(sg);
+		list_for_each_entry_safe(mem, tmp, &head, list) {
+			kfree(mem->data);
+			list_del(&mem->list);
 		}
 	}
+	kfree(sgs);
 	sg_free_table(st);
 	if(macs)
 		kfree(macs);
@@ -2018,10 +2063,12 @@ static int cuda_memcpy_dtoh(VirtIOArg __user *arg, struct port *port)
 		pr_err("[ERROR] can not malloc 0x%lx memory\n", ARG_SIZE);
 		return -ENOMEM;
 	}
-	macs = memdup_user((void *)payload->param, payload->paramSize);
-	if(!macs) {
-		pr_err("[ERROR] can not malloc 0x%x memory\n", payload->paramSize);
-		return -ENOMEM;
+	if(payload->paramSize) {
+		macs = memdup_user((void *)payload->param, payload->paramSize);
+		if(!macs) {
+			pr_err("[ERROR] can not malloc 0x%x memory\n", payload->paramSize);
+			return -ENOMEM;
+		}
 	}
 	gldebug("tid = %d, src=0x%llx, srcSize=0x%x, "
 			"dst=0x%llx, dstSize=0x%x, kind=%llu\n",
@@ -2094,8 +2141,10 @@ static int cuda_memcpy_dtoh(VirtIOArg __user *arg, struct port *port)
 	}
 	sg_init_one(&arg_sg, payload, sizeof(*payload));
 	sgs[num_out++] = &arg_sg;
-	sg_init_one(&mac_sg, macs, payload->paramSize);
-	sgs[num_out+num_in++] = &mac_sg;
+	if(macs) {
+		sg_init_one(&mac_sg, macs, payload->paramSize);
+		sgs[num_out+num_in++] = &mac_sg;
+	}
 	sgs[num_out+num_in++] = st->sgl;
 #ifdef VIRTIO_LOCK
 	spin_lock(&port->io_lock);
@@ -2114,8 +2163,8 @@ static int cuda_memcpy_dtoh(VirtIOArg __user *arg, struct port *port)
 		for_each_sg(st->sgl, sg, st->nents, i) {
 			if(sg_page(sg)) {
 				addr = page_to_virt(sg_page(sg));
-				gldebug("copy to user, then free %x, addr 0x%p, len 0x%x\n", 
-							i, addr, sg->length);
+				// gldebug("copy to user, then free %x, addr 0x%p, len 0x%x\n", 
+				// 			i, addr, sg->length);
 				if (copy_to_user((void*)payload->dst+offset, (void*)addr, sg->length)) {
 					pr_err("[ERROR] Failed to copy to user.\n");
 					// cudaErrorInvalidValue                 =     11,
