@@ -1489,13 +1489,13 @@ static int send_single_payload(VirtIOArg __user *arg, struct port *port)
 	sg_init_one(&arg_sg, payload, sizeof(*payload));
 	sgs[num_out++] = &arg_sg;
 
-#ifdef VIRTIO_LOCK
-	spin_lock(&port->io_lock);
-#endif
+	#ifdef VIRTIO_LOCK
+		spin_lock(&port->io_lock);
+	#endif
 	send_sgs_to_virtio(port, sgs, num_out, num_in);
-#ifdef VIRTIO_LOCK
-	spin_unlock(&port->io_lock);
-#endif
+	#ifdef VIRTIO_LOCK
+		spin_unlock(&port->io_lock);
+	#endif
 
 	gldebug("[+] now analyse return buf\n");
 	gldebug("[+] arg->cmd = %d\n", payload->cmd);
@@ -2519,12 +2519,12 @@ static int cuda_mem_get_info(VirtIOArg __user *arg, struct port *port)
 	return send_single_payload(arg, port);
 }
 
-int cublas_create(VirtIOArg __user *arg, struct port *port)
+static int send_src_payload(VirtIOArg __user *arg, struct port *port)
 {
 	VirtIOArg *payload;
-	int ret;
 	void *ptr;
-	func();
+	struct scatterlist *sgs[2], arg_sg, src_sg;
+	int num_out = 0, num_in = 0;
 
 	payload = (VirtIOArg *)memdup_user(arg, ARG_SIZE);
 	if(!payload) {
@@ -2536,199 +2536,183 @@ int cublas_create(VirtIOArg __user *arg, struct port *port)
 		pr_err("[ERROR] can not malloc 0x%x memory\n", payload->srcSize);
 		return -ENOMEM;
 	}
-	payload->dst = (uint64_t)virt_to_phys(ptr);
 
-	ret = send_to_virtio(port, (void*)payload, ARG_SIZE);
+	sg_init_one(&arg_sg, payload, sizeof(*payload));
+	sgs[num_out++] = &arg_sg;
+	sg_init_one(&src_sg, ptr, payload->srcSize);
+	sgs[num_out+num_in++] = &src_sg;
+	send_sgs_to_virtio(port, sgs, num_out, num_in);
+
 	gldebug("[+] now analyse return buf\n");
 	gldebug("[+] arg->cmd = %d\n", payload->cmd);
-	put_user(payload->cmd, &arg->cmd);
+	copy_to_user(arg, payload, ARG_SIZE);
 	copy_to_user((void __user *)payload->src, ptr, payload->srcSize);
 	kfree(ptr);
 	kfree(payload);
-	return ret;
+	return 0;
+}
+
+static int cublas_create(VirtIOArg __user *arg, struct port *port)
+{
+	func();
+	return send_src_payload(arg, port);
 }
 
 int cublas_destroy(VirtIOArg __user *arg, struct port *port)
 {
-	VirtIOArg *payload;
-	int ret;
-	void *ptr;
-
 	func();
-	payload = (VirtIOArg *)memdup_user(arg, ARG_SIZE);
-	if(!payload) {
-		pr_err("[ERROR] can not malloc 0x%lx memory\n", ARG_SIZE);
-		return -ENOMEM;
-	}
-	ptr = (VirtIOArg *)memdup_user((void*)payload->src, payload->srcSize);
-	if(!ptr) {
-		pr_err("[ERROR] can not malloc 0x%x memory\n", payload->srcSize);
-		return -ENOMEM;
-	}
-	payload->dst = (uint64_t)virt_to_phys(ptr);
-	ret = send_to_virtio(port, (void*)payload, ARG_SIZE);
-	gldebug("[+] now analyse return buf\n");
-	gldebug("[+] arg->cmd = %d\n", payload->cmd);
-	put_user(payload->cmd, &arg->cmd);
-	kfree(ptr);
-	kfree(payload);
-	return ret;
+	return send_single_payload(arg, port);
 }
 
-int cublas_set_vector(VirtIOArg __user *arg, struct port *port)
+static int send_cublas_set_payload(VirtIOArg __user *arg, struct port *port)
 {
 	VirtIOArg *payload;
-	int ret;
-	uint32_t size;
 	void *ptr = NULL;
 	void *h_mem = NULL;
+	struct scatterlist *sgs[3], arg_sg, src_sg, buf_sg;
+	int num_out = 0, num_in = 0;
 
-	func();
 	payload = (VirtIOArg *)memdup_user(arg, ARG_SIZE);
 	if(!payload) {
 		pr_err("[ERROR] can not malloc 0x%lx memory\n", ARG_SIZE);
 		return -ENOMEM;
-	}
-	size = payload->srcSize;
-	payload->flag = 1;
-	if(!find_page_by_addr(payload->src, port)) {
-		payload->flag = 0;
-		h_mem = memdup_user((const void __user *)payload->src, (size_t)size);
-		if(!h_mem) {
-			pr_err("[ERROR] can not malloc 0x%x memory\n", size);
-			return -ENOMEM;
-		}
-		payload->src = (uint64_t)virt_to_phys(h_mem);
 	}
 	ptr = memdup_user((const void __user*)payload->param, payload->paramSize);
 	if(!ptr) {
 		pr_err("[ERROR] can not malloc 0x%x memory\n", payload->paramSize);
 		return -ENOMEM;
 	}
-	payload->param = (uint64_t)virt_to_phys(ptr);
-	ret = send_to_virtio(port, (void*)payload, ARG_SIZE);
+	h_mem = memdup_user((const void __user *)payload->src, payload->srcSize);
+	if(!h_mem) {
+		pr_err("[ERROR] can not malloc 0x%x memory\n", payload->srcSize);
+		return -ENOMEM;
+	}
+	sg_init_one(&arg_sg, payload, sizeof(*payload));
+	sgs[num_out++] = &arg_sg;
+	sg_init_one(&buf_sg, ptr, payload->paramSize);
+	sgs[num_out++] = &buf_sg;
+	sg_init_one(&src_sg, h_mem, payload->srcSize);
+	sgs[num_out++] = &src_sg;
+	send_sgs_to_virtio(port, sgs, num_out, num_in);
+	
 	gldebug("[+] now analyse return buf\n");
 	gldebug("[+] arg->cmd = %d\n", payload->cmd);
 	put_user(payload->cmd, &arg->cmd);
 	kfree(ptr);
-	if(!payload->flag)
-		kfree(h_mem);
+	kfree(h_mem);
 	kfree(payload);
-	return ret;
+	return 0;
+}
+
+static int cublas_set_vector(VirtIOArg __user *arg, struct port *port)
+{
+	func();
+	return send_cublas_set_payload(arg, port);
+}
+
+static int send_cublas_get_payload(VirtIOArg __user *arg, struct port *port)
+{
+	VirtIOArg *payload;
+	void *ptr = NULL;
+	void *h_dst = NULL;
+	struct scatterlist *sgs[3], arg_sg, buf_sg, dst_sg;
+	int num_out = 0, num_in = 0;
+
+	payload = (VirtIOArg *)memdup_user(arg, ARG_SIZE);
+	if(!payload) {
+		pr_err("[ERROR] can not malloc 0x%lx memory\n", ARG_SIZE);
+		return -ENOMEM;
+	}
+	h_dst = kmalloc(payload->srcSize, GFP_KERNEL);
+	if(!h_dst) {
+		pr_err("[ERROR] can not malloc 0x%x memory\n", payload->srcSize);
+		return -ENOMEM;
+	}
+	ptr = memdup_user((const void __user*)payload->param, payload->paramSize);
+	if(!ptr) {
+		pr_err("[ERROR] can not malloc 0x%x memory\n", payload->paramSize);
+		return -ENOMEM;
+	}
+	sg_init_one(&arg_sg, payload, sizeof(*payload));
+	sgs[num_out++] = &arg_sg;
+	sg_init_one(&buf_sg, ptr, payload->paramSize);
+	sgs[num_out++] = &buf_sg;
+	sg_init_one(&dst_sg, h_dst, payload->srcSize);
+	sgs[num_out+num_in++] = &dst_sg;
+	send_sgs_to_virtio(port, sgs, num_out, num_in);
+	
+	gldebug("[+] now analyse return buf\n");
+	gldebug("[+] arg->cmd = %d\n", payload->cmd);
+	copy_to_user(arg, payload, ARG_SIZE);
+	copy_to_user((void __user *)payload->dst, h_dst, payload->srcSize);
+	kfree(ptr);
+	kfree(h_dst);
+	kfree(payload);
+	return 0;
 }
 
 int cublas_get_vector(VirtIOArg __user *arg, struct port *port)
 {
-	VirtIOArg *payload;
-	int ret;
-	uint32_t size;
-	void *ptr = NULL;
-	void *h_mem = NULL;
-
 	func();
-	payload = (VirtIOArg *)memdup_user(arg, ARG_SIZE);
-	if(!payload) {
-		pr_err("[ERROR] can not malloc 0x%lx memory\n", ARG_SIZE);
-		return -ENOMEM;
-	}
-	size = payload->srcSize;
-	payload->flag = 1;
-	if(!find_page_by_addr(payload->dst, port)) {
-		payload->flag = 0;
-		h_mem = kmalloc(size, GFP_KERNEL);
-		if(!h_mem) {
-			pr_err("[ERROR] can not malloc 0x%x memory\n", size);
-			return -ENOMEM;
-		}
-		payload->param2 = (uint64_t)virt_to_phys(h_mem);
-	}
-	ptr = memdup_user((const void __user*)payload->param, payload->paramSize);
-	if(!ptr) {
-		pr_err("[ERROR] can not malloc 0x%x memory\n", payload->paramSize);
-		return -ENOMEM;
-	}
-	payload->param = (uint64_t)virt_to_phys(ptr);
-	ret = send_to_virtio(port, (void*)payload, ARG_SIZE);
-	gldebug("[+] now analyse return buf\n");
-	gldebug("[+] arg->cmd = %d\n", payload->cmd);
-	put_user(payload->cmd, &arg->cmd);
-	kfree(ptr);
-	if(!payload->flag) {
-		copy_to_user((void __user *)payload->dst, h_mem, size);
-		kfree(h_mem);
-	}
-	kfree(payload);
-	return ret;
+	return send_cublas_get_payload(arg, port);
+}
+
+int cublas_set_matrix(VirtIOArg __user *arg, struct port *port)
+{
+	func();
+	return send_cublas_set_payload(arg, port);
+}
+
+int cublas_get_matrix(VirtIOArg __user *arg, struct port *port)
+{
+	func();
+	return send_cublas_get_payload(arg, port);
 }
 
 int cublas_set_stream(VirtIOArg __user *arg, struct port *port)
 {
-	VirtIOArg *payload;
-	int len = sizeof(VirtIOArg);
-	int ret;
-
 	func();
-	payload = (VirtIOArg *)memdup_user(arg, len);
-	if(!payload) {
-		pr_err("[ERROR] can not malloc 0x%x memory\n", len);
-		return -ENOMEM;
-	}
-	ret = send_to_virtio(port, (void*)payload, len);
-	gldebug("[+] now analyse return buf\n");
-	gldebug("[+] arg->cmd = %d\n", payload->cmd);
-	put_user(payload->cmd, &arg->cmd);
-	kfree(payload);
-	return ret;
+	return send_single_payload(arg, port);
 }
 
 int cublas_get_stream(VirtIOArg __user *arg, struct port *port)
 {
-	VirtIOArg *payload;
-	int ret;
 	func();
-
-	payload = (VirtIOArg *)memdup_user(arg, ARG_SIZE);
-	if(!payload) {
-		pr_err("[ERROR] can not malloc 0x%lx memory\n", ARG_SIZE);
-		return -ENOMEM;
-	}
-	ret = send_to_virtio(port, (void*)payload, ARG_SIZE);
-	gldebug("[+] now analyse return buf\n");
-	gldebug("[+] arg->cmd = %d\n", payload->cmd);
-	put_user(payload->cmd, &arg->cmd);
-	put_user(payload->flag, &arg->flag);
-	kfree(payload);
-	return ret;
+	return send_single_payload(arg, port);
 }
 
 static int cublas_asum(VirtIOArg __user *arg, struct port *port)
 {
 	VirtIOArg *payload;
-	int ret;
-	void *ptr = NULL;
-	uint32_t size = 0;
+	void *h_dst = NULL;
+	struct scatterlist *sgs[2], arg_sg, dst_sg;
+	int num_out = 0, num_in = 0;
 
-	func();
 	payload = (VirtIOArg *)memdup_user(arg, ARG_SIZE);
 	if(!payload) {
 		pr_err("[ERROR] can not malloc 0x%lx memory\n", ARG_SIZE);
 		return -ENOMEM;
 	}
-	size = payload->paramSize;
-	ptr = kmalloc(size, GFP_KERNEL);
-	if(!ptr) {
-		pr_err("[ERROR] can not malloc 0x%x memory\n", size);
+
+	h_dst = kmalloc(payload->dstSize, GFP_KERNEL);
+	if(!h_dst) {
+		pr_err("[ERROR] can not malloc 0x%x memory\n", payload->dstSize);
 		return -ENOMEM;
 	}
-	payload->param2 = (uint64_t)virt_to_phys(ptr);
-	ret = send_to_virtio(port, (void*)payload, ARG_SIZE);
+
+	sg_init_one(&arg_sg, payload, sizeof(*payload));
+	sgs[num_out++] = &arg_sg;
+	sg_init_one(&dst_sg, h_dst, payload->dstSize);
+	sgs[num_out+num_in++] = &dst_sg;
+	send_sgs_to_virtio(port, sgs, num_out, num_in);
+	
 	gldebug("[+] now analyse return buf\n");
 	gldebug("[+] arg->cmd = %d\n", payload->cmd);
-	put_user(payload->cmd, &arg->cmd);
-	copy_to_user((void __user *)payload->param, ptr, size);
-	kfree(ptr);
+	copy_to_user(arg, payload, ARG_SIZE);
+	copy_to_user((void __user *)payload->dst, h_dst, payload->dstSize);
+	kfree(h_dst);
 	kfree(payload);
-	return ret;
+	return 0;
 }
 
 int cublas_sasum(VirtIOArg __user *arg, struct port *port)
@@ -2745,21 +2729,7 @@ int cublas_dasum(VirtIOArg __user *arg, struct port *port)
 
 static int cublas_copy(VirtIOArg __user *arg, struct port *port)
 {
-	VirtIOArg *payload;
-	int ret;
-	func();
-
-	payload = (VirtIOArg *)memdup_user(arg, ARG_SIZE);
-	if(!payload) {
-		pr_err("[ERROR] can not malloc 0x%lx memory\n", ARG_SIZE);
-		return -ENOMEM;
-	}
-	ret = send_to_virtio(port, (void*)payload, ARG_SIZE);
-	gldebug("[+] now analyse return buf\n");
-	gldebug("[+] arg->cmd = %d\n", payload->cmd);
-	put_user(payload->cmd, &arg->cmd);
-	kfree(payload);
-	return ret;
+	return send_single_payload(arg, port);
 }
 
 int cublas_scopy(VirtIOArg __user *arg, struct port *port)
@@ -2777,31 +2747,33 @@ int cublas_dcopy(VirtIOArg __user *arg, struct port *port)
 static int cublas_dot(VirtIOArg __user *arg, struct port *port)
 {
 	VirtIOArg *payload;
-	int ret;
 	void *ptr = NULL;
-	uint32_t size = 0;
-	func();
+	struct scatterlist *sgs[2], arg_sg, buf_sg;
+	int num_out = 0, num_in = 0;
 
 	payload = (VirtIOArg *)memdup_user(arg, ARG_SIZE);
 	if(!payload) {
 		pr_err("[ERROR] can not malloc 0x%lx memory\n", ARG_SIZE);
 		return -ENOMEM;
 	}
-	size = payload->paramSize;
-	ptr = kmalloc(size, GFP_KERNEL);
+	ptr = kmalloc(payload->paramSize, GFP_KERNEL);
 	if(!ptr) {
-		pr_err("[ERROR] can not malloc 0x%x memory\n", size);
+		pr_err("[ERROR] can not malloc 0x%x memory\n", payload->paramSize);
 		return -ENOMEM;
 	}
-	payload->param2 = (uint64_t)virt_to_phys(ptr);
-	ret = send_to_virtio(port, (void*)payload, ARG_SIZE);
+	sg_init_one(&arg_sg, payload, sizeof(*payload));
+	sgs[num_out++] = &arg_sg;
+	sg_init_one(&buf_sg, ptr, payload->paramSize);
+	sgs[num_out+num_in++] = &buf_sg;
+	send_sgs_to_virtio(port, sgs, num_out, num_in);
+	
 	gldebug("[+] now analyse return buf\n");
 	gldebug("[+] arg->cmd = %d\n", payload->cmd);
-	put_user(payload->cmd, &arg->cmd);
-	copy_to_user((void __user *)payload->param, ptr, size);
+	copy_to_user(arg, payload, ARG_SIZE);
+	copy_to_user((void __user *)payload->param, ptr, payload->paramSize);
 	kfree(ptr);
 	kfree(payload);
-	return ret;
+	return 0;
 }
 
 int cublas_sdot(VirtIOArg __user *arg, struct port *port)
@@ -2819,9 +2791,9 @@ int cublas_ddot(VirtIOArg __user *arg, struct port *port)
 static int cublas_axpy(VirtIOArg __user *arg, struct port *port)
 {
 	VirtIOArg *payload;
-	int ret;
 	void *ptr = NULL;
-	func();
+	struct scatterlist *sgs[2], arg_sg, buf_sg;
+	int num_out = 0, num_in = 0;
 
 	payload = (VirtIOArg *)memdup_user(arg, ARG_SIZE);
 	if(!payload) {
@@ -2833,14 +2805,18 @@ static int cublas_axpy(VirtIOArg __user *arg, struct port *port)
 		pr_err("[ERROR] can not malloc 0x%x memory\n", payload->paramSize);
 		return -ENOMEM;
 	}
-	payload->param = (uint64_t)virt_to_phys(ptr);
-	ret = send_to_virtio(port, (void*)payload, ARG_SIZE);
+	sg_init_one(&arg_sg, payload, sizeof(*payload));
+	sgs[num_out++] = &arg_sg;
+	sg_init_one(&buf_sg, ptr, payload->paramSize);
+	sgs[num_out++] = &buf_sg;
+	send_sgs_to_virtio(port, sgs, num_out, num_in);
+	
 	gldebug("[+] now analyse return buf\n");
 	gldebug("[+] arg->cmd = %d\n", payload->cmd);
-	put_user(payload->cmd, &arg->cmd);
+	copy_to_user(arg, payload, ARG_SIZE);
 	kfree(ptr);
 	kfree(payload);
-	return ret;
+	return 0;
 }
 
 int cublas_saxpy(VirtIOArg __user *arg, struct port *port)
@@ -2858,9 +2834,9 @@ int cublas_daxpy(VirtIOArg __user *arg, struct port *port)
 static int cublas_scal(VirtIOArg __user *arg, struct port *port)
 {
 	VirtIOArg *payload;
-	int ret;
 	void *ptr = NULL;
-	func();
+	struct scatterlist *sgs[2], arg_sg, buf_sg;
+	int num_out = 0, num_in = 0;
 
 	payload = (VirtIOArg *)memdup_user(arg, ARG_SIZE);
 	if(!payload) {
@@ -2872,14 +2848,18 @@ static int cublas_scal(VirtIOArg __user *arg, struct port *port)
 		pr_err("[ERROR] can not malloc 0x%x memory\n", payload->paramSize);
 		return -ENOMEM;
 	}
-	payload->param = (uint64_t)virt_to_phys(ptr);
-	ret = send_to_virtio(port, (void*)payload, ARG_SIZE);
+	sg_init_one(&arg_sg, payload, sizeof(*payload));
+	sgs[num_out++] = &arg_sg;
+	sg_init_one(&buf_sg, ptr, payload->paramSize);
+	sgs[num_out++] = &buf_sg;
+	send_sgs_to_virtio(port, sgs, num_out, num_in);
+	
 	gldebug("[+] now analyse return buf\n");
 	gldebug("[+] arg->cmd = %d\n", payload->cmd);
-	put_user(payload->cmd, &arg->cmd);
+	copy_to_user(arg, payload, ARG_SIZE);
 	kfree(ptr);
 	kfree(payload);
-	return ret;
+	return 0;
 }
 
 int cublas_sscal(VirtIOArg __user *arg, struct port *port)
@@ -2897,10 +2877,10 @@ int cublas_dscal(VirtIOArg __user *arg, struct port *port)
 static int cublas_gemv(VirtIOArg __user *arg, struct port *port)
 {
 	VirtIOArg *payload;
-	int ret;
-	void *ptr;
+	void *ptr = NULL;
+	struct scatterlist *sgs[2], arg_sg, buf_sg;
+	int num_out = 0, num_in = 0;
 
-	func();
 	payload = (VirtIOArg *)memdup_user(arg, ARG_SIZE);
 	if(!payload) {
 		pr_err("[ERROR] can not malloc 0x%lx memory\n", ARG_SIZE);
@@ -2911,14 +2891,18 @@ static int cublas_gemv(VirtIOArg __user *arg, struct port *port)
 		pr_err("[ERROR] can not malloc 0x%x memory\n", payload->paramSize);
 		return -ENOMEM;
 	}
-	payload->param = (uint64_t)virt_to_phys(ptr);
-	ret = send_to_virtio(port, (void*)payload, ARG_SIZE);
+	sg_init_one(&arg_sg, payload, sizeof(*payload));
+	sgs[num_out++] = &arg_sg;
+	sg_init_one(&buf_sg, ptr, payload->paramSize);
+	sgs[num_out++] = &buf_sg;
+	send_sgs_to_virtio(port, sgs, num_out, num_in);
+	
 	gldebug("[+] now analyse return buf\n");
 	gldebug("[+] arg->cmd = %d\n", payload->cmd);
-	put_user(payload->cmd, &arg->cmd);
+	copy_to_user(arg, payload, ARG_SIZE);
 	kfree(ptr);
 	kfree(payload);
-	return ret;
+	return 0;
 }
 
 int cublas_sgemv(VirtIOArg __user *arg, struct port *port)
@@ -2936,30 +2920,32 @@ int cublas_dgemv(VirtIOArg __user *arg, struct port *port)
 static int cublas_gemm(VirtIOArg __user *arg, struct port *port)
 {
 	VirtIOArg *payload;
-	int len = sizeof(VirtIOArg);
-	int ret;
-	void *ptr;
+	void *ptr = NULL;
+	struct scatterlist *sgs[2], arg_sg, buf_sg;
+	int num_out = 0, num_in = 0;
 
-	func();
-	payload = (VirtIOArg *)memdup_user(arg, len);
+	payload = (VirtIOArg *)memdup_user(arg, ARG_SIZE);
 	if(!payload) {
-		pr_err("[ERROR] can not malloc 0x%x memory\n", len);
+		pr_err("[ERROR] can not malloc 0x%lx memory\n", ARG_SIZE);
 		return -ENOMEM;
 	}
-
 	ptr = memdup_user((const void __user*)payload->param, payload->paramSize);
 	if(!ptr) {
 		pr_err("[ERROR] can not malloc 0x%x memory\n", payload->paramSize);
 		return -ENOMEM;
 	}
-	payload->param = (uint64_t)virt_to_phys(ptr);
-	ret = send_to_virtio(port, (void*)payload, len);
+	sg_init_one(&arg_sg, payload, sizeof(*payload));
+	sgs[num_out++] = &arg_sg;
+	sg_init_one(&buf_sg, ptr, payload->paramSize);
+	sgs[num_out++] = &buf_sg;
+	send_sgs_to_virtio(port, sgs, num_out, num_in);
+	
 	gldebug("[+] now analyse return buf\n");
 	gldebug("[+] arg->cmd = %d\n", payload->cmd);
-	put_user(payload->cmd, &arg->cmd);
+	copy_to_user(arg, payload, ARG_SIZE);
 	kfree(ptr);
 	kfree(payload);
-	return ret;
+	return 0;
 }
 
 int cublas_sgemm(VirtIOArg __user *arg, struct port *port)
@@ -2972,92 +2958,6 @@ int cublas_dgemm(VirtIOArg __user *arg, struct port *port)
 {
 	func();
 	return cublas_gemm(arg, port);
-}
-
-int cublas_set_matrix(VirtIOArg __user *arg, struct port *port)
-{
-	VirtIOArg *payload;
-	int ret;
-	uint32_t size;
-	void *ptr = NULL;
-	void *h_mem = NULL;
-
-	func();
-	payload = (VirtIOArg *)memdup_user(arg, ARG_SIZE);
-	if(!payload) {
-		pr_err("[ERROR] can not malloc 0x%lx memory\n", ARG_SIZE);
-		return -ENOMEM;
-	}
-	size = payload->srcSize;
-	payload->flag = 1;
-	if(!find_page_by_addr(payload->src, port)) {
-		payload->flag = 0;
-		h_mem = memdup_user((const void __user *)payload->src, (size_t)size);
-		if(!h_mem) {
-			pr_err("[ERROR] can not malloc 0x%x memory\n", size);
-			return -ENOMEM;
-		}
-		payload->src = (uint64_t)virt_to_phys(h_mem);
-	}
-	ptr = memdup_user((const void __user*)payload->param, payload->paramSize);
-	if(!ptr) {
-		pr_err("[ERROR] can not malloc 0x%x memory\n", payload->paramSize);
-		return -ENOMEM;
-	}
-	payload->param = (uint64_t)virt_to_phys(ptr);
-	ret = send_to_virtio(port, (void*)payload, ARG_SIZE);
-	gldebug("[+] now analyse return buf\n");
-	gldebug("[+] arg->cmd = %d\n", payload->cmd);
-	put_user(payload->cmd, &arg->cmd);
-	kfree(ptr);
-	if(!payload->flag)
-		kfree(h_mem);
-	kfree(payload);
-	return ret;
-}
-
-int cublas_get_matrix(VirtIOArg __user *arg, struct port *port)
-{
-	VirtIOArg *payload;
-	int ret;
-	uint32_t size;
-	void *ptr = NULL;
-	void *h_mem = NULL;
-
-	func();
-	payload = (VirtIOArg *)memdup_user(arg, ARG_SIZE);
-	if(!payload) {
-		pr_err("[ERROR] can not malloc 0x%lx memory\n", ARG_SIZE);
-		return -ENOMEM;
-	}
-	size = payload->srcSize;
-	payload->flag = 1;
-	if(!find_page_by_addr(payload->dst, port)) {
-		payload->flag = 0;
-		h_mem = kmalloc(size, GFP_KERNEL);
-		if(!h_mem) {
-			pr_err("[ERROR] can not malloc 0x%x memory\n", size);
-			return -ENOMEM;
-		}
-		payload->param2 = (uint64_t)virt_to_phys(h_mem);
-	}
-	ptr = memdup_user((const void __user*)payload->param, payload->paramSize);
-	if(!ptr) {
-		pr_err("[ERROR] can not malloc 0x%x memory\n", payload->paramSize);
-		return -ENOMEM;
-	}
-	payload->param = (uint64_t)virt_to_phys(ptr);
-	ret = send_to_virtio(port, (void*)payload, ARG_SIZE);
-	gldebug("[+] now analyse return buf\n");
-	gldebug("[+] arg->cmd = %d\n", payload->cmd);
-	put_user(payload->cmd, &arg->cmd);
-	kfree(ptr);
-	if(!payload->flag) {
-		copy_to_user((void __user *)payload->dst, h_mem, size);
-		kfree(h_mem);
-	}
-	kfree(payload);
-	return ret;
 }
 
 static int curand_create_generator_v2(VirtIOArg __user *arg, struct port *port)
