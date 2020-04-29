@@ -190,7 +190,7 @@ static size_t roundup(size_t n, size_t alignment)
 
 static void *__mmalloc(size_t size)
 {
-    int alignment = sysconf(_SC_PAGESIZE);
+    long alignment = sysconf(_SC_PAGESIZE);
     func();
     // size_t page_size = sysconf(_SC_PAGESIZE);
     // debug("page size = %d\n", page_size);
@@ -586,8 +586,10 @@ static void ctx_del()
 }
 
 void my_library_init(void) {
+    #ifdef ENABLE_SGX
     #ifdef  TIMING
         struct timeval ecdh_start, ecdh_end;
+    #endif
     #endif
     size_t page_size = sysconf(_SC_PAGESIZE);
     debug("Init dynamic library.\n");
@@ -598,18 +600,18 @@ void my_library_init(void) {
         exit(-1);
     pthread_spin_init(&lock, 0);
 
-#ifdef ENABLE_SGX
-#ifdef  TIMING
-    gettimeofday(&ecdh_start, NULL);
-#endif
-    init_sgx_ecdh(&sgx_env);
-#ifdef  TIMING
-    gettimeofday(&ecdh_end, NULL);
-    double ecdh_time   = (double)(ecdh_end.tv_usec - ecdh_start.tv_usec)/1000000 +
-                    (double)(ecdh_end.tv_sec - ecdh_start.tv_sec);
-    printf("ecdh time: \t\t%f\n", ecdh_time);
-#endif
-#endif // endof ENABLE_SGX
+    #ifdef ENABLE_SGX
+    #ifdef  TIMING
+        gettimeofday(&ecdh_start, NULL);
+    #endif
+        init_sgx_ecdh(&sgx_env);
+    #ifdef  TIMING
+        gettimeofday(&ecdh_end, NULL);
+        double ecdh_time   = (double)(ecdh_end.tv_usec - ecdh_start.tv_usec)/1000000 +
+                        (double)(ecdh_end.tv_sec - ecdh_start.tv_sec);
+        printf("ecdh time: \t\t%f\n", ecdh_time);
+    #endif
+    #endif // endof ENABLE_SGX
 
     p_binary = (fatbin_buf_t *)__libc_malloc(page_size<<5);
     if (!p_binary) {
@@ -619,23 +621,23 @@ void my_library_init(void) {
     debug("p_binary address %p\n", p_binary);
     p_binary->size = 0;
     p_binary->nr_binary = 0;
-    p_binary->total_size = page_size<<5;
-    p_binary->block_size = page_size<<3;
+    p_binary->total_size = (uint32_t)page_size<<5;
+    p_binary->block_size = (uint32_t)page_size<<3;
 }
 
 void my_library_fini(void)
 {
     debug("deinit dynamic library\n");
     __libc_free(p_binary);
-#ifdef ENABLE_SGX
-    fini_sgx_ecdh(sgx_env);
-#endif
+    #ifdef ENABLE_SGX
+        fini_sgx_ecdh(sgx_env);
+    #endif
     close_vdevice();
     ctx_del();
-#ifdef VIRTIO_CUDA_DEBUG
-    count_cuda_api();
-    count_memcpy_size();
-#endif
+    #ifdef VIRTIO_CUDA_DEBUG
+        count_cuda_api();
+        count_memcpy_size();
+    #endif
 }
 // end of library helper
 /**************************************************/
@@ -792,6 +794,10 @@ extern "C" void __cudaRegisterFunction(
         return;
     }
     func->raw_func.host_func = (void *)hostFun;
+/*    unsigned char *p = (unsigned char *)hostFun;
+    for(int i=0; i<64; i++) {
+        printf("%02x ", *(p+i));
+    }*/
 
     memset(&arg, 0, ARG_LEN);
     arg.cmd     = VIRTIO_CUDA_REGISTERFUNCTION;
@@ -3419,12 +3425,19 @@ curandGenerate(curandGenerator_t generator, unsigned int *outputPtr, size_t num)
 {
     VirtIOArg arg;
     func();
+    if(!outputPtr || num<=0)
+        return CURAND_STATUS_SUCCESS;
     memset(&arg, 0, sizeof(VirtIOArg));
     arg.cmd     = VIRTIO_CURAND_GENERATE;
     arg.src     = (uint64_t)generator;
     arg.dst     = (uint64_t)outputPtr;
     arg.dstSize = (uint32_t)(num*sizeof(unsigned int));
     arg.param   = (uint64_t)num;
+    arg.flag    = 1;
+    /* if the outputPtr is device */
+    if(g_mallocPtr_size.find((unsigned long long)outputPtr) != g_mallocPtr_size.end()) {
+        arg.flag = 0;
+    }
     send_to_device(VIRTIO_IOC_CURAND_GENERATE, &arg);
     return (curandStatus_t)arg.cmd;
 }
@@ -3454,6 +3467,11 @@ curandGenerateNormal(curandGenerator_t generator, float *outputPtr,
     memcpy(buf+idx, &stddev, sizeof(float));
     arg.param       = (uint64_t)buf;
     arg.paramSize   = (uint32_t)len;
+    arg.flag    = 1;
+    /* if the outputPtr is device */
+    if(g_mallocPtr_size.find((unsigned long long)outputPtr) != g_mallocPtr_size.end()) {
+        arg.flag = 0;
+    }
     send_to_device(VIRTIO_IOC_CURAND_GENERATENORMAL, &arg);
     __libc_free(buf);
     return (curandStatus_t)arg.cmd;
@@ -3484,6 +3502,11 @@ curandGenerateNormalDouble(curandGenerator_t generator, double *outputPtr,
     memcpy(buf+idx, &stddev, sizeof(double));
     arg.param       = (uint64_t)buf;
     arg.paramSize   = (uint32_t)len;
+    arg.flag    = 1;
+    /* if the outputPtr is device */
+    if(g_mallocPtr_size.find((unsigned long long)outputPtr) != g_mallocPtr_size.end()) {
+        arg.flag = 0;
+    }
     send_to_device(VIRTIO_IOC_CURAND_GENERATENORMALDOUBLE, &arg);
     __libc_free(buf);
     return (curandStatus_t)arg.cmd;
@@ -3502,6 +3525,11 @@ curandGenerateUniform(curandGenerator_t generator, float *outputPtr, size_t num)
     arg.dst     = (uint64_t)outputPtr;
     arg.dstSize = (uint32_t)(num*sizeof(float));
     arg.param   = (uint64_t)num;
+    arg.flag    = 1;
+    /* if the outputPtr is device */
+    if(g_mallocPtr_size.find((unsigned long long)outputPtr) != g_mallocPtr_size.end()) {
+        arg.flag = 0;
+    }
     send_to_device(VIRTIO_IOC_CURAND_GENERATEUNIFORM, &arg);
     return (curandStatus_t)arg.cmd;
 }
@@ -3519,6 +3547,11 @@ curandGenerateUniformDouble(curandGenerator_t generator, double *outputPtr, size
     arg.dst     = (uint64_t)outputPtr;
     arg.dstSize = (uint32_t)(num*sizeof(double));
     arg.param   = (uint64_t)num;
+    arg.flag    = 1;
+    /* if the outputPtr is device */
+    if(g_mallocPtr_size.find((unsigned long long)outputPtr) != g_mallocPtr_size.end()) {
+        arg.flag = 0;
+    }
     send_to_device(VIRTIO_IOC_CURAND_GENERATEUNIFORMDOUBLE, &arg);
     return (curandStatus_t)arg.cmd;
 }
