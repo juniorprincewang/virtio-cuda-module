@@ -77,8 +77,8 @@ int main()
 	float *d_a=0, *d_b;
 	float *h_a=0;
 	dim3 block, grid;
-	int num = 1 << 22;
-    int nbytes = num * sizeof(float);
+	long num = (1 << 20)+ (1<<13);
+    long nbytes = num * sizeof(float);
     float value=41;
     struct timeval malloc_start, malloc_end;
     struct timeval meminit_start, meminit_end;
@@ -111,8 +111,8 @@ int main()
 		gettimeofday(&total_start, NULL);
 	#endif
 
-    printf("sending 0x%x\n", nbytes);
-	printf("allocating 0x%x\n", nbytes);
+	printf("num = 0x%lx\n", num);
+    printf("sending 0x%lx\n", nbytes);
     #ifdef  TIMING
 		gettimeofday(&malloc_start, NULL);
 	#endif
@@ -164,12 +164,13 @@ int main()
 	#ifdef  TIMING
 		gettimeofday(&HtoD_start, NULL);
 	#endif
-	CHECK(cudaMemcpy(d_a, h_a, nbytes, cudaMemcpyHostToDevice));
-	// CHECK(cudaMemcpy(d_a, h_a, nbytes, cudaMemcpyDefault));
+	// CHECK(cudaMemcpy(d_a, h_a, nbytes, cudaMemcpyHostToDevice));
+	CHECK(cudaMemcpy(d_a, h_a, nbytes, cudaMemcpyDefault));
 	// CHECK(cudaMemcpySafe(d_a, h_a, nbytes, cudaMemcpyHostToDevice));
 	#ifdef  TIMING
 		gettimeofday(&HtoD_end, NULL);
 	#endif
+	// return 0;
 	#ifdef  TIMING
 		gettimeofday(&kernel_start, NULL);
 	#endif
@@ -182,8 +183,8 @@ int main()
 	#ifdef  TIMING
 		gettimeofday(&DtoH_start, NULL);
 	#endif
-	CHECK(cudaMemcpy(h_a, d_a, nbytes, cudaMemcpyDeviceToHost));
-	// CHECK(cudaMemcpy(h_a, d_a, nbytes, cudaMemcpyDefault));
+	// CHECK(cudaMemcpy(h_a, d_a, nbytes, cudaMemcpyDeviceToHost));
+	CHECK(cudaMemcpy(h_a, d_a, nbytes, cudaMemcpyDefault));
 	// CHECK(cudaMemcpySafe(h_a, d_a, nbytes, cudaMemcpyDeviceToHost));
 	#ifdef  TIMING
 		gettimeofday(&DtoH_end, NULL);

@@ -110,8 +110,8 @@ else
 endif
 
 App_Cpp_Flags := $(App_C_Flags)
-App_Link_Flags := -shared -L$(SGX_LIBRARY_PATH) -l$(Urts_Library_Name) -L. -lsgx_ukey_exchange -lpthread -ldl -Wl,-rpath=$(CURDIR)
-App_Link_Flags += -Wl,-soname,libcudart.so.$(CUDA_MAJOR).$(CUDA_MINOR) 
+App_Link_Flags := -shared -L$(SGX_LIBRARY_PATH) -l$(Urts_Library_Name) -L. -lsgx_ukey_exchange -Wl,-rpath,$(CURDIR)  #-ldl
+App_Link_Flags += -Wl,-soname,libcudart.so.$(CUDA_MAJOR).$(CUDA_MINOR)  -Wl,--version-script=libcudart.version
 
 ifneq ($(SGX_MODE), HW)
 	App_Link_Flags += -lsgx_uae_service_sim

@@ -23,9 +23,9 @@ int main(void){
 	printf("\n actual asum = %g\n", res);
 	// on the device
 	double* d_x; // d_x - x on the device
-	cudaStat=cudaMalloc((void**)&d_x,n*sizeof(*x)); //device
 	// memory alloc
 	stat = cublasCreate(&handle); // initialize CUBLAS context
+	cudaStat=cudaMalloc((void**)&d_x,n*sizeof(*x)); //device
 	stat = cublasSetVector(n,sizeof(*x),x,1,d_x ,1);// cp x->d_x
 	double result;
 	// add absolute values of elements of the array d_x:
